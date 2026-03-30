@@ -32,13 +32,151 @@ MAX_HISTORY = 12
 pending_searches: dict = {}
 
 
+# ── Perfiles por país ─────────────────────────────────────────────────────────
+
+PERFILES_PAIS = {
+    "AR": {
+        "nombre": "Argentina",
+        "dialecto": 'español rioplatense (argentino): usás "vos", "te", "podés", "querés", "che", etc.',
+        "visa_pais": "ciudadanos argentinos",
+        "mostrar_ars": True,
+        "aerolineas": """🔵 AEROLÍNEAS ARGENTINAS (AR)
+- "Vuelos en Cuotas": hasta 18 cuotas sin interés con bancos seleccionados (Galicia, Macro, BBVA, Santander, HSBC, Patagonia, Supervielle). Ver: https://www.aerolineas.com.ar/es-ar/cuotas
+- Promo Smiles: acumulás millas con la tarjeta Smiles Mastercard.
+- Descuentos jubilados: 30% con credencial ANSES.
+- Ofertas: https://www.aerolineas.com.ar/es-ar/ofertas
+
+🟠 JETSMART (JA)
+- Promo Flash: descuentos hasta 50%, generalmente martes y miércoles.
+- Cuotas con Mercado Pago (hasta 12 cuotas). Página: https://jetsmart.com/ar/es/vuelos-baratos/
+- Bagaje no incluido en tarifa básica — sumar "Smart+" para valija.
+
+🟡 FLYBONDI (FO)
+- "Bondi Sale": precios flash desde $0 (solo tasas). Código PRIMERAVEZ para nuevos usuarios.
+- Newsletter: https://www.flybondi.com/ar — Ofertas: https://www.flybondi.com/ar/vuelos-baratos
+
+🔴 LATAM (LA)
+- Cuotas sin interés: hasta 12 cuotas con Banco Nación, Galicia, BBVA. Ver: https://www.latamairlines.com/ar/es/cuotas
+- Programa LATAM Pass. Ofertas: https://www.latamairlines.com/ar/es/ofertas
+
+💡 CONSEJOS PARA ARGENTINA:
+- Mejores promos: martes y miércoles. Hot Sale (mayo) y CyberMonday (noviembre).
+- Comprar con 2-3 meses de anticipación da mejores precios.
+- Al mostrar precios: convertís a ARS usando dólar blue y mencionás el ahorro de pagar en USD vs. pesos oficiales.""",
+    },
+    "ES": {
+        "nombre": "España",
+        "dialecto": 'español de España: usás "tú", "puedes", "quieres", "tío/tía", etc. Eres cercano y directo.',
+        "visa_pais": "ciudadanos españoles (UE)",
+        "mostrar_ars": False,
+        "aerolineas": """🟡 RYANAIR
+- Low cost líder en Europa. Tarifas desde 5€, pero el equipaje de bodega es extra.
+- Ofertas y newsletter: https://www.ryanair.com — Compra solo con equipaje de mano para máximo ahorro.
+
+🟠 VUELING
+- Aerolínea española con buena red doméstica e internacional.
+- Programa Vueling Club para acumular puntos. Ofertas: https://www.vueling.com/es/ofertas-vuelos
+
+🔵 IBERIA
+- Para vuelos de larga distancia y conexiones premium.
+- Programa Iberia Plus: acumula Avios canjeables en vuelos y hoteles. Ofertas: https://www.iberia.com/es/ofertas/
+
+🟢 EASYJET
+- Segundo low cost más grande de Europa. Ofertas: https://www.easyjet.com/es
+
+🟣 WIZZ AIR
+- Low cost para Europa del Este y rutas emergentes. Membresía Wizz Discount Club para precios reducidos.
+
+💡 CONSEJOS PARA ESPAÑA/EUROPA:
+- Busca con 6-8 semanas de anticipación para vuelos domésticos europeos.
+- Martes y miércoles suelen tener mejores tarifas. Evita viernes tarde y domingo.
+- Para rutas cortas, considera el tren (Renfe, Eurostar) como alternativa.
+- Al mostrar precios: muestra en USD (como los calcula Google Flights) y convierte a EUR.""",
+    },
+    "MX": {
+        "nombre": "México",
+        "dialecto": 'español mexicano: usás "tú", "puedes", "órale", "chido". Eres cálido y cercano.',
+        "visa_pais": "ciudadanos mexicanos",
+        "mostrar_ars": False,
+        "aerolineas": """🟡 VOLARIS
+- Low cost líder en México. Tarifas base sin equipaje.
+- Programa V-Club para descuentos exclusivos. Ofertas: https://www.volaris.com/ofertas
+
+🟠 VIVA AEROBUS
+- Low cost con vuelos nacionales e internacionales a EE.UU. y LATAM.
+- "Promo Viva": ofertas flash en app y newsletter: https://www.vivaaerobus.com
+
+🔵 AEROMÉXICO
+- Aerolínea bandera. Programa Club Premier para millas.
+- Convenios con Banamex, BBVA, Santander. Ofertas: https://aeromexico.com/es-mx/ofertas
+
+💡 CONSEJOS PARA MÉXICO:
+- Comprar martes y miércoles. El Buen Fin (noviembre) tiene grandes promos.
+- Comparar siempre Volaris vs. Viva vs. Aeroméxico para vuelos domésticos.
+- Al mostrar precios: muestra en USD y convierte a MXN.""",
+    },
+    "CL": {
+        "nombre": "Chile",
+        "dialecto": 'español chileno: usás "tú", "podís" (informal), "cachai", "po". Eres cercano y amable.',
+        "visa_pais": "ciudadanos chilenos",
+        "mostrar_ars": False,
+        "aerolineas": """🔴 LATAM (LA)
+- Aerolínea dominante en Chile. Programa LATAM Pass.
+- Cuotas con BancoEstado, Falabella, Ripley: https://www.latamairlines.com/cl/es/ofertas
+
+🟠 JETSMART
+- Low cost en crecimiento. Promo Flash martes y miércoles: https://jetsmart.com/cl/es/
+
+🔵 SKY AIRLINE
+- Low cost chilena con buena red doméstica. Programa Sky Miles: https://www.skyairline.com/chile
+
+💡 CONSEJOS PARA CHILE:
+- JetSmart y Sky son mucho más baratas que LATAM para vuelos domésticos.
+- Al mostrar precios: muestra en USD y convierte a CLP.""",
+    },
+    "CO": {
+        "nombre": "Colombia",
+        "dialecto": 'español colombiano: usás "usted" o "tú" según contexto, "parce", "chévere". Eres cálido y amable.',
+        "visa_pais": "ciudadanos colombianos",
+        "mostrar_ars": False,
+        "aerolineas": """🔵 AVIANCA
+- Aerolínea bandera de Colombia. Programa LifeMiles para millas.
+- Ofertas: https://www.avianca.com/co/es/ofertas/
+
+🟡 LATAM (LA)
+- Vuelos internacionales y domésticos. Programa LATAM Pass.
+
+🟠 WINGO
+- Low cost colombiana, tarifas económicas: https://www.wingo.com
+
+💡 CONSEJOS PARA COLOMBIA:
+- Bogotá (BOG) y Medellín (MDE) son los hubs principales.
+- Temporadas altas: Semana Santa, junio-julio y diciembre — comprar con anticipación.
+- Al mostrar precios: muestra en USD y convierte a COP.""",
+    },
+    "DEFAULT": {
+        "nombre": "tu país",
+        "dialecto": 'español neutro: usás "tú", "puedes", "quieres". Te adaptás al tono del usuario.',
+        "visa_pais": "ciudadanos de tu país",
+        "mostrar_ars": False,
+        "aerolineas": """💡 CONSEJOS GENERALES PARA VOLAR BARATO:
+- Buscá en Google Flights, Skyscanner y Kayak para comparar precios.
+- Los martes y miércoles suelen tener mejores tarifas.
+- Comprá con 4-8 semanas de anticipación para vuelos cortos/medios.
+- Para vuelos largos, con 2-4 meses de anticipación.
+- Las aerolíneas low cost (Ryanair, EasyJet, Spirit, Volaris) son las más económicas si viajás ligero.
+- Suscribite a newsletters de aerolíneas para acceder a promos exclusivas.""",
+    },
+}
+
+
 # ── Prompt del sistema ────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT_BASE = """Sos Flynow, el mejor asistente de viajes del mundo. Hablás en español rioplatense (argentino): usás "vos", "te", "podés", "querés", etc. Sos cálido, entusiasta, conciso y muy útil.
+SYSTEM_PROMPT_TEMPLATE = """Sos Flynow, el mejor asistente de viajes del mundo. Hablás en {dialecto}. Sos cálido, entusiasta, conciso y muy útil.
 
 Tu especialidad es encontrar vuelos baratos, pero también asesorás sobre:
 - Clima y mejor época para visitar destinos
-- Requisitos de visa para ciudadanos argentinos
+- Requisitos de visa para {visa_pais}
 - Consejos de viaje: presupuesto, hospedaje, zonas, seguridad
 - Moneda, idioma, costumbres locales
 - Atracciones, gastronomía, actividades
@@ -57,55 +195,23 @@ FLUJO DE BÚSQUEDA — MUY IMPORTANTE
 3. Si el usuario dice "sí" o confirma, la búsqueda se ejecuta automáticamente — NO llamés vos mismo a buscar_fechas_baratas o buscar_vuelos_fecha después de confirmar_busqueda.
 4. Si el usuario no sabe a dónde ir o dice "sorprendeme", "no sé", "a dónde puedo ir", usá `sorprender_destino`.
 5. Cuando el usuario mencione su ciudad de origen por primera vez, guardala con `guardar_ciudad_origen`.
+6. Cuando el usuario mencione su país de residencia/origen (ej: "soy de España", "vivo en México"), guardalo con `guardar_pais`.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CONOCIMIENTO DE AEROLÍNEAS ARGENTINAS Y PROMOCIONES
+AEROLÍNEAS Y PROMOS — {nombre_pais}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🔵 AEROLÍNEAS ARGENTINAS (AR)
-- Programa de cuotas: "Vuelos en Cuotas" — hasta 18 cuotas sin interés con bancos seleccionados (Galicia, Macro, BBVA, Santander, HSBC, Patagonia, Supervielle, entre otros). Varía según la promo vigente.
-- Promo Smiles: acumulás millas con la tarjeta Smiles Mastercard.
-- Descuentos jubilados: 30% con credencial ANSES.
-- Página de ofertas: https://www.aerolineas.com.ar/es-ar/ofertas
-- Página de cuotas: https://www.aerolineas.com.ar/es-ar/cuotas
-- Promo del mes: https://www.aerolineas.com.ar/es-ar/promociones
-
-🟠 JETSMART (JA)
-- Promo Flash: descuentos de hasta 50% cada semana, generalmente martes y miércoles.
-- Códigos de descuento: se publican en su newsletter y redes sociales. Suscribirse en: https://jetsmart.com/ar/es/
-- Cuotas: trabaja con Mercado Pago (hasta 12 cuotas con tarjetas seleccionadas) y algunos bancos.
-- Página de ofertas: https://jetsmart.com/ar/es/vuelos-baratos/
-- Bagaje: el básico no incluye equipaje de bodega — conviene sumar "Smart+" para viajes con valija.
-
-🟡 FLYBONDI (FO)
-- "Bondi Sale": promotions flash cada semanas, precios desde $0 (solo tasas).
-- Código PRIMERAVEZ: descuento para nuevos usuarios (verificar vigencia).
-- Cuotas: acepta Mercado Pago en cuotas y algunas tarjetas de crédito.
-- Newsletter con códigos exclusivos: https://www.flybondi.com/ar
-- Página de ofertas: https://www.flybondi.com/ar/vuelos-baratos
-
-🔴 LATAM (LA)
-- Cuotas sin interés: hasta 12 cuotas con Banco Nación, Galicia, BBVA y otros. Ver: https://www.latamairlines.com/ar/es/cuotas
-- Promo "Cyber" y "Hot Sale": descuentos importantes en fechas especiales.
-- Programa LATAM Pass: acumulás puntos.
-- Ofertas: https://www.latamairlines.com/ar/es/ofertas
-
-💡 CONSEJOS GENERALES SOBRE CUOTAS Y PROMOS:
-- Las mejores promos suelen aparecer los MARTES y MIÉRCOLES.
-- Hot Sale (mayo), CyberMonday (noviembre) y el "Cyber Lunes" de cada aerolínea son los mejores momentos.
-- Para cuotas sin interés: verificar siempre con el banco emisor de la tarjeta, ya que los convenios cambian mensualmente.
-- Suscribirse al newsletter de cada aerolínea da acceso a códigos exclusivos antes que al público general.
-- Comprar con 2-3 meses de anticipación suele dar mejores precios que las ofertas de último momento (salvo promos flash específicas).
+{aerolineas}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Cuando mostrés resultados de búsqueda de vuelos, siempre mencionás:
 1. El precio por persona Y el total si vinieron más de 1 pasajero
-2. Qué aerolínea opera y si tiene programa de cuotas relevante
-3. El link directo a la página de ofertas/cuotas de esa aerolínea
+2. Qué aerolínea opera y si tiene programa de descuentos/cuotas relevante para el usuario
+3. El link directo a la página de ofertas de esa aerolínea
 
 Reglas:
-- Respondés siempre en español rioplatense
+- Respondés siempre en el dialecto del usuario
 - Sos breve: máximo 3-4 párrafos cuando no hay herramientas
 - Usás emojis con moderación (1-3 por mensaje)
 - Nunca dejás al usuario sin una respuesta útil
@@ -115,6 +221,9 @@ Reglas:
 
 def get_system_prompt(chat_id: int) -> str:
     user = get_user(chat_id)
+    pais = (user or {}).get("pais") or "AR"
+    perfil = PERFILES_PAIS.get(pais, PERFILES_PAIS["DEFAULT"])
+
     contexto = ""
     if user and user.get("ciudad_origen"):
         origen = user["ciudad_origen"]
@@ -122,7 +231,14 @@ def get_system_prompt(chat_id: int) -> str:
         contexto = f"\nEl usuario sale habitualmente desde: {origen}. Usalo como origen por defecto si no especifica otro."
         if nombre:
             contexto = f"\nEl usuario se llama {nombre}." + contexto
-    return SYSTEM_PROMPT_BASE.format(
+    elif user and user.get("nombre"):
+        contexto = f"\nEl usuario se llama {user['nombre']}."
+
+    return SYSTEM_PROMPT_TEMPLATE.format(
+        dialecto=perfil["dialecto"],
+        visa_pais=perfil["visa_pais"],
+        nombre_pais=perfil["nombre"],
+        aerolineas=perfil["aerolineas"],
         fecha=datetime.today().strftime('%d/%m/%Y'),
         contexto_usuario=contexto,
     )
@@ -250,6 +366,21 @@ TOOLS = [
                 "nombre": {"type": "string", "description": "Nombre legible de la ciudad (ej: Mendoza)"},
             },
             "required": ["iata"],
+        },
+    },
+    {
+        "name": "guardar_pais",
+        "description": (
+            "Guarda el país de residencia del usuario para personalizar aerolíneas, moneda y dialecto. "
+            "Llamar cuando el usuario mencione su país de origen o residencia (ej: 'soy de España', 'vivo en México')."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "codigo": {"type": "string", "description": "Código ISO 2 letras del país (AR, ES, MX, CL, CO, PE, UY, BR, US, etc.)"},
+                "nombre": {"type": "string", "description": "Nombre del país (ej: España)"},
+            },
+            "required": ["codigo"],
         },
     },
     {
@@ -511,7 +642,7 @@ def share_button_markup(url: str, text: str = "Mirá estos vuelos que encontré 
     return markup
 
 
-def execute_buscar_fechas(origen, destino, fecha_desde, fecha_hasta, duracion_noches=3, pasajeros=1) -> str:
+def execute_buscar_fechas(origen, destino, fecha_desde, fecha_hasta, duracion_noches=3, pasajeros=1, pais="AR") -> str:
     raw = run_fli_text([
         "dates", origen, destino,
         "--from", fecha_desde, "--to", fecha_hasta,
@@ -539,8 +670,9 @@ def execute_buscar_fechas(origen, destino, fecha_desde, fecha_hasta, duracion_no
     top = rows[:10]
     dur_txt = f"{duracion_noches} noche{'s' if duracion_noches != 1 else ''}"
 
-    cotiz = get_dolar()
-    blue = cotiz.get("blue")
+    mostrar_ars = PERFILES_PAIS.get(pais, PERFILES_PAIS["DEFAULT"]).get("mostrar_ars", False)
+    cotiz = get_dolar() if mostrar_ars else {}
+    blue = cotiz.get("blue") if mostrar_ars else None
 
     pas_txt = f" · {pasajeros} personas" if pasajeros > 1 else ""
     lines = [f"Top {len(top)} fechas más baratas ({dur_txt}, ida y vuelta{pas_txt}):\n"]
@@ -570,7 +702,7 @@ def execute_buscar_fechas(origen, destino, fecha_desde, fecha_hasta, duracion_no
     return "\n".join(lines)
 
 
-def execute_buscar_vuelos(origen, destino, fecha_ida, fecha_vuelta=None, pasajeros=1) -> str:
+def execute_buscar_vuelos(origen, destino, fecha_ida, fecha_vuelta=None, pasajeros=1, pais="AR") -> str:
     args = ["flights", origen, destino, fecha_ida]
     if fecha_vuelta:
         args += ["--return", fecha_vuelta]
@@ -584,8 +716,9 @@ def execute_buscar_vuelos(origen, destino, fecha_ida, fecha_vuelta=None, pasajer
     if not flights:
         return "No hay vuelos disponibles para esa ruta y fecha."
 
-    cotiz = get_dolar()
-    blue = cotiz.get("blue")
+    mostrar_ars = PERFILES_PAIS.get(pais, PERFILES_PAIS["DEFAULT"]).get("mostrar_ars", False)
+    cotiz = get_dolar() if mostrar_ars else {}
+    blue = cotiz.get("blue") if mostrar_ars else None
 
     lines = []
     for i, f in enumerate(flights[:5], 1):
@@ -923,6 +1056,9 @@ def check_alertas():
 # ── Motor de IA ───────────────────────────────────────────────────────────────
 
 def run_tool(name: str, inputs: dict, chat_id: int = 0, message_id: int = 0) -> str:
+    _user = get_user(chat_id)
+    _pais = (_user or {}).get("pais") or "AR"
+
     if name == "buscar_fechas_baratas":
         track_event(chat_id, "search_dates", {
             "origen": inputs.get("origen"), "destino": inputs.get("destino"),
@@ -933,6 +1069,7 @@ def run_tool(name: str, inputs: dict, chat_id: int = 0, message_id: int = 0) -> 
             inputs["fecha_desde"], inputs["fecha_hasta"],
             inputs.get("duracion_noches", 3),
             inputs.get("pasajeros", 1),
+            pais=_pais,
         )
     if name == "buscar_vuelos_fecha":
         track_event(chat_id, "search_flights", {
@@ -943,6 +1080,7 @@ def run_tool(name: str, inputs: dict, chat_id: int = 0, message_id: int = 0) -> 
             inputs["origen"], inputs["destino"],
             inputs["fecha_ida"], inputs.get("fecha_vuelta"),
             inputs.get("pasajeros", 1),
+            pais=_pais,
         )
     if name == "confirmar_busqueda":
         return execute_confirmar_busqueda(
@@ -967,6 +1105,12 @@ def run_tool(name: str, inputs: dict, chat_id: int = 0, message_id: int = 0) -> 
         save_user(chat_id, ciudad_origen=inputs["iata"].upper())
         nombre = inputs.get("nombre", inputs["iata"])
         return f"✅ Guardé que salís desde {nombre} ({inputs['iata'].upper()}). De ahora en más lo uso como origen por defecto 🏠"
+    if name == "guardar_pais":
+        codigo = inputs["codigo"].upper()
+        save_user(chat_id, pais=codigo)
+        perfil = PERFILES_PAIS.get(codigo, PERFILES_PAIS["DEFAULT"])
+        nombre_pais = inputs.get("nombre") or perfil["nombre"]
+        return f"✅ Guardé que sos de {nombre_pais}. De ahora en más te adapto los consejos y aerolíneas de tu región 🌍"
     if name == "crear_alerta_precio":
         track_event(chat_id, "alert_created", {
             "origen": inputs.get("origen"), "destino": inputs.get("destino"),
@@ -1147,10 +1291,12 @@ def handle_confirm(call):
             return
 
         bot.send_message(chat_id, random.choice(LOADING_MSGS))
+        _user = get_user(chat_id)
+        _pais = (_user or {}).get("pais") or "AR"
         if pending["tipo"] == "fechas":
-            result = execute_buscar_fechas(**pending["params"])
+            result = execute_buscar_fechas(**pending["params"], pais=_pais)
         else:
-            result = execute_buscar_vuelos(**pending["params"])
+            result = execute_buscar_vuelos(**pending["params"], pais=_pais)
 
         send_result(chat_id, call.message.message_id, result)
     else:
@@ -1276,15 +1422,41 @@ def cmd_start(message):
         f"• 🔍 Buscar vuelos baratos\n"
         f"• 📅 Encontrar las fechas más económicas\n"
         f"• 🌦️ Info sobre clima y destinos\n"
-        f"• 🛂 Requisitos de visa para argentinos\n"
+        f"• 🛂 Requisitos de visa\n"
         f"• 🔔 Alertas cuando bajen los precios\n\n"
         f"Escribime o mandame un 🎙️ *audio* — hablame como si fuera un amigo.\n\n"
         f"¿A dónde soñás viajar? 🌍"
     )
     bot.send_message(chat_id, saludo, parse_mode="Markdown")
 
-    # Onboarding: si es la primera vez, preguntar ciudad de origen
-    if not tiene_origen:
+    # Onboarding: si es la primera vez, preguntar país
+    if not user or not user.get("pais"):
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.row(
+            telebot.types.InlineKeyboardButton("🇦🇷 Argentina", callback_data="pais:AR"),
+            telebot.types.InlineKeyboardButton("🇪🇸 España", callback_data="pais:ES"),
+        )
+        markup.row(
+            telebot.types.InlineKeyboardButton("🇲🇽 México", callback_data="pais:MX"),
+            telebot.types.InlineKeyboardButton("🇨🇱 Chile", callback_data="pais:CL"),
+        )
+        markup.row(
+            telebot.types.InlineKeyboardButton("🇨🇴 Colombia", callback_data="pais:CO"),
+            telebot.types.InlineKeyboardButton("🌍 Otro país", callback_data="pais:OTHER"),
+        )
+        bot.send_message(
+            chat_id,
+            "Primero: ¿desde qué país viajás? Así te adapto las aerolíneas y consejos 😊",
+            reply_markup=markup,
+            parse_mode="Markdown",
+        )
+    elif not tiene_origen:
+        _ask_ciudad_origen(chat_id, user.get("pais", "AR"))
+
+
+def _ask_ciudad_origen(chat_id: int, pais: str = "AR"):
+    """Muestra botones de ciudad de origen según el país del usuario."""
+    if pais == "AR":
         markup = telebot.types.InlineKeyboardMarkup()
         markup.row(
             telebot.types.InlineKeyboardButton("🏙️ Buenos Aires", callback_data="origen:EZE"),
@@ -1294,15 +1466,78 @@ def cmd_start(message):
             telebot.types.InlineKeyboardButton("🌿 Córdoba", callback_data="origen:COR"),
             telebot.types.InlineKeyboardButton("🌊 Rosario", callback_data="origen:ROS"),
         )
-        markup.row(
-            telebot.types.InlineKeyboardButton("✈️ Otra ciudad", callback_data="origen:otra"),
-        )
+        markup.row(telebot.types.InlineKeyboardButton("✈️ Otra ciudad", callback_data="origen:otra"))
         bot.send_message(
             chat_id,
-            "Antes de empezar: ¿desde qué ciudad solés volar? Así no te lo pregunto cada vez 😊",
-            reply_markup=markup,
-            parse_mode="Markdown",
+            "¿Desde qué ciudad solés volar? Así no te lo pregunto cada vez 😊",
+            reply_markup=markup, parse_mode="Markdown",
         )
+    elif pais == "ES":
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.row(
+            telebot.types.InlineKeyboardButton("🏙️ Madrid", callback_data="origen:MAD"),
+            telebot.types.InlineKeyboardButton("🌊 Barcelona", callback_data="origen:BCN"),
+        )
+        markup.row(
+            telebot.types.InlineKeyboardButton("☀️ Málaga", callback_data="origen:AGP"),
+            telebot.types.InlineKeyboardButton("🌴 Valencia", callback_data="origen:VLC"),
+        )
+        markup.row(telebot.types.InlineKeyboardButton("✈️ Otra ciudad", callback_data="origen:otra"))
+        bot.send_message(
+            chat_id,
+            "¿Desde qué ciudad sueles volar? Así no te lo pregunto cada vez 😊",
+            reply_markup=markup, parse_mode="Markdown",
+        )
+    elif pais == "MX":
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.row(
+            telebot.types.InlineKeyboardButton("🏙️ Ciudad de México", callback_data="origen:MEX"),
+            telebot.types.InlineKeyboardButton("🌊 Cancún", callback_data="origen:CUN"),
+        )
+        markup.row(
+            telebot.types.InlineKeyboardButton("🌮 Guadalajara", callback_data="origen:GDL"),
+            telebot.types.InlineKeyboardButton("🏔️ Monterrey", callback_data="origen:MTY"),
+        )
+        markup.row(telebot.types.InlineKeyboardButton("✈️ Otra ciudad", callback_data="origen:otra"))
+        bot.send_message(
+            chat_id,
+            "¿Desde qué ciudad sueles volar? Así no te lo pregunto cada vez 😊",
+            reply_markup=markup, parse_mode="Markdown",
+        )
+    else:
+        bot.send_message(
+            chat_id,
+            "¿Desde qué ciudad solés volar habitualmente? Escribime el nombre y lo guardo para la próxima ✈️",
+        )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("pais:"))
+def handle_pais(call):
+    codigo = call.data.replace("pais:", "")
+    chat_id = call.message.chat.id
+    try:
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+
+    if codigo == "OTHER":
+        bot.send_message(
+            chat_id,
+            "¡Sin problema! ¿De qué país sos? Escribime el nombre y lo guardo 🌍",
+        )
+        bot.answer_callback_query(call.id)
+        return
+
+    perfil = PERFILES_PAIS.get(codigo, PERFILES_PAIS["DEFAULT"])
+    save_user(chat_id, pais=codigo)
+    bot.send_message(
+        chat_id,
+        f"¡Perfecto! Guardé *{perfil['nombre']}* 🌍 Ahora te adapto las aerolíneas y consejos de tu región.\n\n"
+        f"¿Querés que te pregunte desde qué ciudad solés volar para no tener que repetirlo?",
+        parse_mode="Markdown",
+    )
+    _ask_ciudad_origen(chat_id, codigo)
+    bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("origen:"))
@@ -1314,7 +1549,11 @@ def handle_origen(call):
     except Exception:
         pass
 
-    nombres = {"EZE": "Buenos Aires", "MDZ": "Mendoza", "COR": "Córdoba", "ROS": "Rosario"}
+    nombres = {
+        "EZE": "Buenos Aires", "MDZ": "Mendoza", "COR": "Córdoba", "ROS": "Rosario",
+        "MAD": "Madrid", "BCN": "Barcelona", "AGP": "Málaga", "VLC": "Valencia",
+        "MEX": "Ciudad de México", "CUN": "Cancún", "GDL": "Guadalajara", "MTY": "Monterrey",
+    }
 
     if iata == "otra":
         bot.send_message(chat_id, "¿Desde qué ciudad volás habitualmente? Escribime el nombre 🏙️")
