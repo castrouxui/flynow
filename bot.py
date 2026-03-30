@@ -121,6 +121,38 @@ TOOLS = [
         },
     },
     {
+        "name": "preguntar_con_opciones",
+        "description": (
+            "Hacer UNA pregunta al usuario mostrando botones de respuesta rápida. "
+            "Usar SIEMPRE que necesites preguntarle al usuario sobre fechas, duración, cantidad de personas, o sí/no. "
+            "NO hagas la pregunta en texto — usá esta herramienta para que aparezcan botones tapeables."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pregunta": {"type": "string", "description": "La pregunta a mostrar al usuario"},
+                "tipo": {
+                    "type": "string",
+                    "enum": ["meses", "duracion", "personas", "si_no", "custom"],
+                    "description": (
+                        "Tipo de opciones: "
+                        "'meses' = botones con los meses del año, "
+                        "'duracion' = finde/semana/10días/2semanas, "
+                        "'personas' = 1/2/3/4 personas, "
+                        "'si_no' = Sí/No, "
+                        "'custom' = opciones personalizadas"
+                    ),
+                },
+                "opciones_custom": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Solo si tipo=custom: lista de opciones a mostrar como botones (máx 6)",
+                },
+            },
+            "required": ["pregunta", "tipo"],
+        },
+    },
+    {
         "name": "crear_alerta_precio",
         "description": (
             "Crea una alerta para notificar al usuario cuando el precio de un vuelo baje de un umbral. "
@@ -433,6 +465,71 @@ def execute_buscar_vuelos(origen, destino, fecha_ida, fecha_vuelta=None, pasajer
 
 # ── Motor de IA ───────────────────────────────────────────────────────────────
 
+# ── Botones rápidos ───────────────────────────────────────────────────────────
+
+OPCIONES_MESES = [
+    ["Enero", "Febrero", "Marzo"],
+    ["Abril", "Mayo", "Junio"],
+    ["Julio", "Agosto", "Septiembre"],
+    ["Octubre", "Noviembre", "Diciembre"],
+]
+OPCIONES_DURACION = [["Finde (2 días)", "1 semana", "10 días", "2 semanas"]]
+OPCIONES_PERSONAS = [["Solo yo", "2 personas", "3 personas", "4 o más"]]
+OPCIONES_SI_NO = [["Sí ✅", "No ❌"]]
+
+
+def build_keyboard(tipo: str, opciones_custom: list = None) -> telebot.types.InlineKeyboardMarkup:
+    markup = telebot.types.InlineKeyboardMarkup()
+    if tipo == "meses":
+        for fila in OPCIONES_MESES:
+            markup.row(*[telebot.types.InlineKeyboardButton(m, callback_data=f"resp:{m}") for m in fila])
+    elif tipo == "duracion":
+        for fila in OPCIONES_DURACION:
+            markup.row(*[telebot.types.InlineKeyboardButton(o, callback_data=f"resp:{o}") for o in fila])
+    elif tipo == "personas":
+        for fila in OPCIONES_PERSONAS:
+            markup.row(*[telebot.types.InlineKeyboardButton(o, callback_data=f"resp:{o}") for o in fila])
+    elif tipo == "si_no":
+        for fila in OPCIONES_SI_NO:
+            markup.row(*[telebot.types.InlineKeyboardButton(o, callback_data=f"resp:{o}") for o in fila])
+    elif tipo == "custom" and opciones_custom:
+        # Agrupar en filas de 2
+        row = []
+        for i, op in enumerate(opciones_custom[:6]):
+            row.append(telebot.types.InlineKeyboardButton(op, callback_data=f"resp:{op}"))
+            if len(row) == 2 or i == len(opciones_custom) - 1:
+                markup.row(*row)
+                row = []
+    return markup
+
+
+def execute_preguntar(chat_id: int, message_id: int, pregunta: str, tipo: str, opciones_custom: list = None) -> str:
+    markup = build_keyboard(tipo, opciones_custom)
+    audio_hint = "\n\n_También podés responder por 🎙️ audio_"
+    bot.send_message(
+        chat_id, pregunta + audio_hint,
+        reply_to_message_id=message_id,
+        reply_markup=markup,
+        parse_mode="Markdown",
+    )
+    return "__pregunta_enviada__"
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("resp:"))
+def handle_button(call):
+    respuesta = call.data.replace("resp:", "")
+    # Quitar botones del mensaje original
+    try:
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+    # Mostrar la selección del usuario
+    bot.send_message(call.message.chat.id, f"👉 _{respuesta}_", parse_mode="Markdown")
+    # Procesar como si hubiera escrito el texto
+    handle_message(call.message.chat.id, call.message.message_id, respuesta)
+    bot.answer_callback_query(call.id)
+
+
 # ── Alertas ───────────────────────────────────────────────────────────────────
 
 _current_chat_id: int = 0  # set before each tool call
@@ -588,7 +685,7 @@ def check_alertas():
         pass
 
 
-def run_tool(name: str, inputs: dict, chat_id: int = 0) -> str:
+def run_tool(name: str, inputs: dict, chat_id: int = 0, message_id: int = 0) -> str:
     if name == "buscar_fechas_baratas":
         return execute_buscar_fechas(
             inputs["origen"], inputs["destino"],
@@ -601,6 +698,12 @@ def run_tool(name: str, inputs: dict, chat_id: int = 0) -> str:
             inputs["origen"], inputs["destino"],
             inputs["fecha_ida"], inputs.get("fecha_vuelta"),
             inputs.get("pasajeros", 1),
+        )
+    if name == "preguntar_con_opciones":
+        return execute_preguntar(
+            chat_id, message_id,
+            inputs["pregunta"], inputs["tipo"],
+            inputs.get("opciones_custom"),
         )
     if name == "crear_alerta_precio":
         return execute_crear_alerta(
@@ -617,7 +720,7 @@ def run_tool(name: str, inputs: dict, chat_id: int = 0) -> str:
     return "Herramienta desconocida."
 
 
-def chat_with_ai(chat_id: int, user_text: str) -> str:
+def chat_with_ai(chat_id: int, user_text: str, message_id: int = 0) -> str:
     """Send message to Claude, handle tool calls, return final text response."""
     if not ai:
         return None
@@ -651,7 +754,7 @@ def chat_with_ai(chat_id: int, user_text: str) -> str:
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
-                    result = run_tool(block.name, block.input, chat_id=chat_id)
+                    result = run_tool(block.name, block.input, chat_id=chat_id, message_id=message_id)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -716,9 +819,14 @@ def handle_message(chat_id, message_id, text):
     msg = bot.send_message(chat_id, random.choice(LOADING_MSGS),
                            reply_to_message_id=message_id)
     try:
-        response = chat_with_ai(chat_id, text)
-        if not response:
-            response = "Lo siento, no pude procesar tu consulta. Intentá de nuevo 😕"
+        response = chat_with_ai(chat_id, text, message_id=message_id)
+        if not response or response == "__pregunta_enviada__":
+            # Si Claude usó preguntar_con_opciones, el mensaje ya fue enviado
+            try:
+                bot.delete_message(chat_id, msg.message_id)
+            except Exception:
+                pass
+            return
 
         bot.edit_message_text(
             response,
@@ -807,9 +915,13 @@ def handle_voice(message):
                           message.chat.id, msg.message_id, parse_mode="Markdown")
 
     try:
-        response = chat_with_ai(message.chat.id, text)
-        if not response:
-            response = "No pude procesar eso. Intentá de nuevo 😕"
+        response = chat_with_ai(message.chat.id, text, message_id=message.message_id)
+        if not response or response == "__pregunta_enviada__":
+            try:
+                bot.delete_message(message.chat.id, msg.message_id)
+            except Exception:
+                pass
+            return
         bot.edit_message_text(
             f"🎙️ _\"{text}\"_\n\n{response}",
             chat_id=message.chat.id, message_id=msg.message_id,
