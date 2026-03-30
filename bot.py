@@ -18,6 +18,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+ADMIN_CHAT_ID = int(os.environ["ADMIN_CHAT_ID"]) if os.environ.get("ADMIN_CHAT_ID") else None
 
 bot = telebot.TeleBot(TOKEN)
 ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
@@ -404,6 +405,21 @@ def save_history_to_db(chat_id: int):
             db.table("conversaciones").update(payload).eq("chat_id", chat_id).execute()
         else:
             db.table("conversaciones").insert({"chat_id": chat_id, **payload}).execute()
+    except Exception:
+        pass
+
+
+def track_event(chat_id: int, evento: str, datos: dict = None):
+    """Registra un evento de uso en la tabla `eventos` (fire-and-forget)."""
+    if not db:
+        return
+    try:
+        db.table("eventos").insert({
+            "chat_id": chat_id,
+            "evento": evento,
+            "datos": datos or {},
+            "created_at": datetime.now().isoformat(),
+        }).execute()
     except Exception:
         pass
 
@@ -890,6 +906,10 @@ def check_alertas():
                         f"[Reservar ahora →]({link})\n\n"
                         f"_¡Los precios cambian rápido, no lo dejes para después!_ ⏰"
                     )
+                    track_event(alerta["chat_id"], "alert_triggered", {
+                        "origen": origen, "destino": destino,
+                        "precio_min": precio_min, "precio_max": precio_max,
+                    })
                     bot.send_message(alerta["chat_id"], msg,
                                      parse_mode="Markdown", disable_web_page_preview=True)
 
@@ -904,6 +924,10 @@ def check_alertas():
 
 def run_tool(name: str, inputs: dict, chat_id: int = 0, message_id: int = 0) -> str:
     if name == "buscar_fechas_baratas":
+        track_event(chat_id, "search_dates", {
+            "origen": inputs.get("origen"), "destino": inputs.get("destino"),
+            "pasajeros": inputs.get("pasajeros", 1),
+        })
         return execute_buscar_fechas(
             inputs["origen"], inputs["destino"],
             inputs["fecha_desde"], inputs["fecha_hasta"],
@@ -911,6 +935,10 @@ def run_tool(name: str, inputs: dict, chat_id: int = 0, message_id: int = 0) -> 
             inputs.get("pasajeros", 1),
         )
     if name == "buscar_vuelos_fecha":
+        track_event(chat_id, "search_flights", {
+            "origen": inputs.get("origen"), "destino": inputs.get("destino"),
+            "pasajeros": inputs.get("pasajeros", 1),
+        })
         return execute_buscar_vuelos(
             inputs["origen"], inputs["destino"],
             inputs["fecha_ida"], inputs.get("fecha_vuelta"),
@@ -940,6 +968,10 @@ def run_tool(name: str, inputs: dict, chat_id: int = 0, message_id: int = 0) -> 
         nombre = inputs.get("nombre", inputs["iata"])
         return f"✅ Guardé que salís desde {nombre} ({inputs['iata'].upper()}). De ahora en más lo uso como origen por defecto 🏠"
     if name == "crear_alerta_precio":
+        track_event(chat_id, "alert_created", {
+            "origen": inputs.get("origen"), "destino": inputs.get("destino"),
+            "precio_max_usd": inputs.get("precio_max_usd"),
+        })
         return execute_crear_alerta(
             chat_id,
             inputs["origen"], inputs["destino"],
@@ -1068,6 +1100,7 @@ def send_result(chat_id: int, message_id: int, text: str):
 
 
 def handle_message(chat_id, message_id, text):
+    track_event(chat_id, "message")
     msg = bot.send_message(chat_id, random.choice(LOADING_MSGS),
                            reply_to_message_id=message_id)
     try:
@@ -1162,12 +1195,74 @@ def handle_button(call):
     bot.answer_callback_query(call.id)
 
 
+@bot.message_handler(commands=["stats"])
+def cmd_stats(message):
+    if not ADMIN_CHAT_ID or message.chat.id != ADMIN_CHAT_ID:
+        bot.reply_to(message, "No tenés permiso para ver esto 🔒")
+        return
+    if not db:
+        bot.reply_to(message, "Base de datos no disponible.")
+        return
+
+    now = datetime.now()
+    hace_7d = (now - timedelta(days=7)).isoformat()
+    hace_30d = (now - timedelta(days=30)).isoformat()
+
+    try:
+        total_users = db.table("usuarios").select("chat_id", count="exact").execute().count or 0
+        total_alertas = db.table("alertas").select("id", count="exact").eq("activa", True).execute().count or 0
+
+        eventos_res = db.table("eventos").select("*").execute()
+        eventos = eventos_res.data or []
+
+        total_msgs = sum(1 for e in eventos if e["evento"] == "message")
+        total_voice = sum(1 for e in eventos if e["evento"] == "voice")
+        total_starts = sum(1 for e in eventos if e["evento"] == "start")
+        total_searches = sum(1 for e in eventos if e["evento"] in ("search_dates", "search_flights"))
+        total_alerts_triggered = sum(1 for e in eventos if e["evento"] == "alert_triggered")
+
+        users_7d = len({e["chat_id"] for e in eventos if e.get("created_at", "") >= hace_7d})
+        users_30d = len({e["chat_id"] for e in eventos if e.get("created_at", "") >= hace_30d})
+
+        # Rutas más buscadas
+        rutas: dict = {}
+        for e in eventos:
+            if e["evento"] in ("search_dates", "search_flights") and e.get("datos"):
+                origen = e["datos"].get("origen", "?")
+                destino = e["datos"].get("destino", "?")
+                if origen and destino:
+                    ruta = f"{origen} → {destino}"
+                    rutas[ruta] = rutas.get(ruta, 0) + 1
+        top_rutas = sorted(rutas.items(), key=lambda x: x[1], reverse=True)[:5]
+        rutas_txt = "\n".join(f"   {r} ({c})" for r, c in top_rutas) if top_rutas else "   Sin datos aún"
+
+        lines = [
+            "📊 *Stats de Flynow*\n",
+            f"👥 *Usuarios totales:* {total_users}",
+            f"📅 *Activos últimos 7 días:* {users_7d}",
+            f"📅 *Activos últimos 30 días:* {users_30d}",
+            f"🔔 *Alertas activas:* {total_alertas}",
+            "",
+            f"💬 *Mensajes procesados:* {total_msgs}",
+            f"🎙️ *Audios procesados:* {total_voice}",
+            f"🚀 *Starts /start:* {total_starts}",
+            f"🔍 *Búsquedas realizadas:* {total_searches}",
+            f"🚨 *Alertas disparadas:* {total_alerts_triggered}",
+            "",
+            f"✈️ *Top rutas buscadas:*\n{rutas_txt}",
+        ]
+        bot.reply_to(message, "\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        bot.reply_to(message, f"Error al obtener stats: {e}")
+
+
 @bot.message_handler(commands=["start"])
 def cmd_start(message):
     chat_id = message.chat.id
     nombre = message.from_user.first_name or "viajero"
     histories.pop(chat_id, None)  # reset in-memory history
 
+    track_event(chat_id, "start")
     # Guardar nombre del usuario
     save_user(chat_id, nombre=nombre)
 
@@ -1271,6 +1366,7 @@ def cmd_help(message):
 
 @bot.message_handler(content_types=["voice"])
 def handle_voice(message):
+    track_event(message.chat.id, "voice")
     if not GROQ_API_KEY:
         bot.reply_to(
             message,
