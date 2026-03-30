@@ -12,6 +12,9 @@ import requests
 TOKEN = os.environ["BOT_TOKEN"]
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
+# Estado conversacional por usuario { chat_id: { step, destino, origen, mes, duracion } }
+user_states: dict = {}
+
 bot = telebot.TeleBot(TOKEN)
 
 # ── Datos ─────────────────────────────────────────────────────────────────────
@@ -262,26 +265,29 @@ def format_dates_table(raw: str, origen: str, destino: str, duracion: int) -> st
     rows.sort(key=lambda x: x[4])
     top = rows[:10]
     cheapest = top[0]
-
-    link = google_flights_url(origen, destino, cheapest[0], cheapest[2])
-
     dur_txt = f"{duracion} noche{'s' if duracion != 1 else ''}"
+
     lines = [f"Estas son las *{len(top)} fechas más baratas* para ir y volver ({dur_txt}):\n"]
 
     for i, (dep, dep_day, ret, ret_day, price) in enumerate(top, 1):
         medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"  {i}."
         dep_es = DIAS_ES.get(dep_day, dep_day)
         ret_es = DIAS_ES.get(ret_day, ret_day)
+        # Link individual por fecha
+        link = google_flights_url(origen, destino, dep, ret)
         lines.append(
-            f"{medal} *{fmt_price(price)}* — {fmt_date_es(dep)} ({dep_es}) → {fmt_date_es(ret)} ({ret_es})"
+            f"{medal} *{fmt_price(price)}* — {fmt_date_es(dep)} ({dep_es}) → {fmt_date_es(ret)} ({ret_es})\n"
+            f"   [Comprar este vuelo →]({link})"
         )
 
     savings = top[-1][4] - top[0][4]
     if savings > 0:
-        lines.append(f"\n💰 Saliendo el {fmt_date_es(cheapest[0])} ahorrás hasta *{fmt_price(savings)}* vs la fecha más cara.")
+        lines.append(
+            f"\n💰 Saliendo el {fmt_date_es(cheapest[0])} ahorrás hasta *{fmt_price(savings)}* "
+            f"vs la opción más cara del listado."
+        )
 
-    lines.append(f"\n[Ver todos los precios en Google Flights →]({link})")
-    lines.append(f"\n💡 _¿Querés ver los vuelos de alguna fecha en particular? Decime cuál._")
+    lines.append(f"\n💡 _¿Querés ver los vuelos de una fecha en particular? Decime cuál._")
     return "\n".join(lines)
 
 
@@ -486,6 +492,19 @@ def do_fechas(chat_id, reply_to_id, origen, destino, mes=None, duracion=3, edit_
 
 # ── Procesamiento central ─────────────────────────────────────────────────────
 
+def send_or_edit(chat_id, message_id, text, edit_msg_id=None, **kwargs):
+    if edit_msg_id:
+        bot.edit_message_text(text, chat_id, edit_msg_id, **kwargs)
+    else:
+        bot.send_message(chat_id, text, reply_to_message_id=message_id, **kwargs)
+
+
+def find_single_city(text_lower: str) -> str | None:
+    """Detecta si el texto menciona exactamente una ciudad conocida."""
+    found = find_cities_in_order(text_lower)
+    return found[0] if len(found) == 1 else None
+
+
 def process_text(chat_id, message_id, text, edit_msg_id=None):
     normalized = text.lower().strip().rstrip("!").rstrip("?").rstrip(".")
 
@@ -499,7 +518,57 @@ def process_text(chat_id, message_id, text, edit_msg_id=None):
                          reply_to_message_id=message_id, parse_mode="Markdown")
         return
 
+    # ── Flujo conversacional pendiente ──────────────────────────────────────
+    state = user_states.get(chat_id)
+
+    if state:
+        step = state.get("step")
+
+        if step == "ask_origen":
+            # El usuario responde con su ciudad de origen
+            origen = find_single_city(normalized) or resolve_iata(normalized.upper())
+            if not origen:
+                # Intentar como código directo
+                code = normalized.upper().strip()
+                if len(code) == 3 and code.isalpha():
+                    origen = code
+            if origen:
+                user_states.pop(chat_id, None)
+                do_fechas(chat_id, message_id, origen, state["destino"],
+                          mes=state.get("mes"), duracion=state.get("duracion", 3),
+                          edit_msg_id=edit_msg_id)
+            else:
+                send_or_edit(
+                    chat_id, message_id,
+                    "No reconocí esa ciudad 😅 ¿Podés escribirla diferente o usar el código? "
+                    "Por ejemplo: _Mendoza_ o _MDZ_",
+                    edit_msg_id=edit_msg_id, parse_mode="Markdown"
+                )
+            return
+
+        if step == "ask_destino":
+            destino = find_single_city(normalized) or resolve_iata(normalized.upper())
+            if not destino:
+                code = normalized.upper().strip()
+                if len(code) == 3 and code.isalpha():
+                    destino = code
+            if destino:
+                user_states.pop(chat_id, None)
+                do_fechas(chat_id, message_id, state["origen"], destino,
+                          mes=state.get("mes"), duracion=state.get("duracion", 3),
+                          edit_msg_id=edit_msg_id)
+            else:
+                send_or_edit(
+                    chat_id, message_id,
+                    "No reconocí ese destino 😅 ¿Lo podés escribir diferente? "
+                    "Por ejemplo: _Barcelona_ o _BCN_",
+                    edit_msg_id=edit_msg_id, parse_mode="Markdown"
+                )
+            return
+
+    # ── Parseo normal ────────────────────────────────────────────────────────
     parsed = parse_natural(text)
+
     if parsed:
         do_fechas(
             chat_id, message_id,
@@ -508,19 +577,36 @@ def process_text(chat_id, message_id, text, edit_msg_id=None):
             duracion=parsed.get("duracion", 3),
             edit_msg_id=edit_msg_id,
         )
-    else:
-        reply = (
-            "Hmm, no pude identificar el destino 🤔\n\n"
-            "Contame a dónde querés ir, por ejemplo:\n"
-            "✈️ _\"mendoza a barcelona en mayo\"_\n"
-            "✈️ _\"quiero ir a Miami, una semana en julio\"_\n"
-            "✈️ _\"mdz eze\"_\n\n"
-            "¿A dónde tenés ganas de ir? 😊"
+        return
+
+    # ── Solo detecté un destino → preguntar origen ──────────────────────────
+    single = find_single_city(text.lower())
+    if single:
+        user_states[chat_id] = {
+            "step": "ask_origen",
+            "destino": single,
+            "mes": next((num for nombre, num in MESES.items() if nombre in text.lower()), None),
+            "duracion": 7 if "semana" in text.lower() else 3,
+        }
+        send_or_edit(
+            chat_id, message_id,
+            f"¡Buena elección, *{single}* es un destino genial! 😍\n\n"
+            f"¿Desde qué ciudad salís?",
+            edit_msg_id=edit_msg_id, parse_mode="Markdown"
         )
-        if edit_msg_id:
-            bot.edit_message_text(reply, chat_id, edit_msg_id, parse_mode="Markdown")
-        else:
-            bot.send_message(chat_id, reply, reply_to_message_id=message_id, parse_mode="Markdown")
+        return
+
+    # ── No entendí nada ──────────────────────────────────────────────────────
+    send_or_edit(
+        chat_id, message_id,
+        "Hmm, no pude identificar la ruta 🤔\n\n"
+        "Contame a dónde querés ir, por ejemplo:\n"
+        "✈️ _\"quiero ir a Barcelona en mayo\"_\n"
+        "✈️ _\"mendoza a miami, una semana\"_\n"
+        "✈️ _\"mdz eze\"_\n\n"
+        "¿A dónde tenés ganas de volar? 😊",
+        edit_msg_id=edit_msg_id, parse_mode="Markdown"
+    )
 
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
