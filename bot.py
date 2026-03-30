@@ -20,42 +20,81 @@ bot = telebot.TeleBot(TOKEN)
 # ── Datos ─────────────────────────────────────────────────────────────────────
 
 CIUDAD_A_IATA = {
+    # Argentina
     "mendoza": "MDZ", "mdz": "MDZ",
     "buenos aires": "EZE", "ezeiza": "EZE", "eze": "EZE",
     "aeroparque": "AEP", "aep": "AEP",
-    "barcelona": "BCN", "bcn": "BCN",
-    "madrid": "MAD", "mad": "MAD",
-    "miami": "MIA", "mia": "MIA",
-    "new york": "JFK", "nueva york": "JFK", "jfk": "JFK",
-    "roma": "FCO", "rome": "FCO", "fco": "FCO",
-    "paris": "CDG", "parís": "CDG", "cdg": "CDG",
-    "london": "LHR", "londres": "LHR", "lhr": "LHR",
-    "cancun": "CUN", "cancún": "CUN", "cun": "CUN",
-    "lima": "LIM", "lim": "LIM",
-    "santiago": "SCL", "scl": "SCL",
-    "bogota": "BOG", "bogotá": "BOG", "bog": "BOG",
-    "sao paulo": "GRU", "são paulo": "GRU", "gru": "GRU",
-    "rio": "GIG", "río": "GIG", "gig": "GIG",
     "cordoba": "COR", "córdoba": "COR", "cor": "COR",
     "rosario": "ROS", "ros": "ROS",
     "bariloche": "BRC", "brc": "BRC",
     "iguazu": "IGR", "iguazú": "IGR", "igr": "IGR",
-    "dubai": "DXB", "dxb": "DXB",
-    "tokio": "NRT", "tokyo": "NRT", "nrt": "NRT",
+    "salta": "SLA", "sla": "SLA",
+    "tucuman": "TUC", "tucumán": "TUC", "tuc": "TUC",
+    "mar del plata": "MDQ", "mdq": "MDQ",
+    "neuquen": "NQN", "neuquén": "NQN", "nqn": "NQN",
+    # Brasil — ciudades y zonas turísticas
+    "brasil": "GRU", "brazil": "GRU",
+    "sao paulo": "GRU", "são paulo": "GRU", "san pablo": "GRU", "gru": "GRU",
+    "rio de janeiro": "GIG", "río de janeiro": "GIG", "rio": "GIG", "gig": "GIG",
+    "buzios": "GIG", "búzios": "GIG", "buzios": "GIG",
+    "barra de tijuca": "GIG", "tijuca": "GIG",
+    "florianopolis": "FLN", "florianópolis": "FLN", "floripa": "FLN", "fln": "FLN",
+    "salvador": "SSA", "ssa": "SSA",
+    "fortaleza": "FOR", "for": "FOR",
+    "recife": "REC", "rec": "REC",
+    "belo horizonte": "CNF", "cnf": "CNF",
+    "foz do iguacu": "IGU", "foz": "IGU", "igu": "IGU",
+    "natal": "NAT", "nat": "NAT",
+    "manaus": "MAO", "mao": "MAO",
+    "porto alegre": "POA", "poa": "POA",
+    "brasilia": "BSB", "brasília": "BSB", "bsb": "BSB",
+    "maceio": "MCZ", "maceió": "MCZ", "mcz": "MCZ",
+    # Europa
+    "barcelona": "BCN", "bcn": "BCN",
+    "madrid": "MAD", "mad": "MAD",
+    "roma": "FCO", "rome": "FCO", "fco": "FCO",
+    "paris": "CDG", "parís": "CDG", "cdg": "CDG",
+    "london": "LHR", "londres": "LHR", "lhr": "LHR",
     "amsterdam": "AMS", "ams": "AMS",
     "frankfurt": "FRA", "fra": "FRA",
+    "milan": "MXP", "milán": "MXP", "mxp": "MXP",
+    "lisboa": "LIS", "lisbon": "LIS", "lis": "LIS",
+    "tenerife": "TFN", "tfn": "TFN",
+    "zurich": "ZRH", "zúrich": "ZRH", "zrh": "ZRH",
+    "viena": "VIE", "vienna": "VIE", "vie": "VIE",
+    "praga": "PRG", "prague": "PRG", "prg": "PRG",
+    "berlin": "BER", "berlín": "BER", "ber": "BER",
+    "bruselas": "BRU", "brussels": "BRU", "bru": "BRU",
+    "estambul": "IST", "istanbul": "IST", "ist": "IST",
+    "atenas": "ATH", "athens": "ATH", "ath": "ATH",
+    "budapest": "BUD", "bud": "BUD",
+    # América del Norte y Central
+    "miami": "MIA", "mia": "MIA",
+    "new york": "JFK", "nueva york": "JFK", "jfk": "JFK",
     "orlando": "MCO", "mco": "MCO",
     "los angeles": "LAX", "lax": "LAX",
     "toronto": "YYZ", "yyz": "YYZ",
     "ciudad de mexico": "MEX", "mexico": "MEX", "mex": "MEX",
-    "tenerife": "TFN", "tfn": "TFN",
-    "lisboa": "LIS", "lisbon": "LIS", "lis": "LIS",
+    "cancun": "CUN", "cancún": "CUN", "cun": "CUN",
     "punta cana": "PUJ", "puj": "PUJ",
-    "maldivas": "MLE", "mle": "MLE",
-    "tokio": "HND", "haneda": "HND",
+    "habana": "HAV", "la habana": "HAV", "cuba": "HAV", "hav": "HAV",
+    # América del Sur
+    "santiago": "SCL", "scl": "SCL",
+    "lima": "LIM", "lim": "LIM",
+    "bogota": "BOG", "bogotá": "BOG", "bog": "BOG",
+    "cartagena": "CTG", "ctg": "CTG",
+    "medellin": "MDE", "medellín": "MDE", "mde": "MDE",
+    "quito": "UIO", "uio": "UIO",
+    "montevideo": "MVD", "mvd": "MVD",
+    "asuncion": "ASU", "asunción": "ASU", "paraguay": "ASU", "asu": "ASU",
+    # Asia / Medio Oriente / Oceanía
+    "dubai": "DXB", "dxb": "DXB",
+    "tokio": "NRT", "tokyo": "NRT", "japon": "NRT", "japón": "NRT", "nrt": "NRT",
     "sydney": "SYD", "syd": "SYD",
-    "zurich": "ZRH", "zúrich": "ZRH", "zrh": "ZRH",
-    "milan": "MXP", "milán": "MXP", "mxp": "MXP",
+    "bangkok": "BKK", "bkk": "BKK",
+    "bali": "DPS", "dps": "DPS",
+    "singapur": "SIN", "singapore": "SIN", "sin": "SIN",
+    "maldivas": "MLE", "mle": "MLE",
 }
 
 MESES = {
@@ -338,24 +377,29 @@ def parse_natural(text: str) -> dict | None:
     if len(found_iata) < 2:
         return None
 
-    # Mes
+    # Mes — acepta "junio/julio", "junio o julio", "entre junio y julio"
     mes = None
+    meses_encontrados = []
     for nombre, num in MESES.items():
-        if nombre in text_lower:
-            mes = num
-            break
+        if re.search(rf'\b{nombre}\b', text_lower):
+            meses_encontrados.append(num)
+    if meses_encontrados:
+        mes = min(meses_encontrados)  # usa el primero cronológicamente
 
     # Duración
     duracion = 3
     m_dur = re.search(r'(\d+)\s*(día|dias|noches|noche|nights?|days?)', text_lower)
     if m_dur:
         duracion = int(m_dur.group(1))
-    elif re.search(r'\buna\s+semana\b|\bla\s+semana\b|\bsemana\b', text_lower):
-        duracion = 7
     elif re.search(r'\bdos\s+semanas\b|\b2\s+semanas\b', text_lower):
         duracion = 14
+    elif re.search(r'\buna\s+semana\b|\bla\s+semana\b|\bsemana\b', text_lower):
+        duracion = 7
     elif re.search(r'\bfinde\b|\bfin\s+de\s+semana\b', text_lower):
         duracion = 2
+
+    # Rango multi-mes (ej: "junio/julio" → buscar en ambos meses)
+    rango_mes = len(meses_encontrados) > 1
 
     # Solo ida
     solo_ida = bool(re.search(r'\bsolo\s+ida\b|\bsin\s+vuelta\b|\bida\s+sola\b', text_lower))
@@ -364,6 +408,7 @@ def parse_natural(text: str) -> dict | None:
         "origen": found_iata[0],
         "destino": found_iata[1],
         "mes": mes,
+        "mes_fin": max(meses_encontrados) if rango_mes else mes,
         "duracion": duracion,
         "solo_ida": solo_ida,
     }
@@ -440,20 +485,28 @@ def do_vuelos(chat_id, reply_to_id, origen, destino, fecha_ida, fecha_vuelta=Non
     )
 
 
-def do_fechas(chat_id, reply_to_id, origen, destino, mes=None, duracion=3, edit_msg_id=None):
+def do_fechas(chat_id, reply_to_id, origen, destino, mes=None, mes_fin=None, duracion=3, edit_msg_id=None):
+    now = datetime.today()
     if mes:
-        year = datetime.today().year
-        now = datetime.today()
+        year = now.year
         if mes < now.month or (mes == now.month and now.day > 20):
             year += 1
         desde = datetime(year, mes, 1).strftime("%Y-%m-%d")
-        hasta_dt = (datetime(year + 1, 1, 1) - timedelta(days=1)) if mes == 12 \
-            else (datetime(year, mes + 1, 1) - timedelta(days=1))
+        # Si hay rango de meses (ej: junio/julio), llegar al fin del mes final
+        mes_end = mes_fin or mes
+        year_end = year
+        if mes_end < mes:
+            year_end += 1
+        hasta_dt = (datetime(year_end + 1, 1, 1) - timedelta(days=1)) if mes_end == 12 \
+            else (datetime(year_end, mes_end + 1, 1) - timedelta(days=1))
         hasta = hasta_dt.strftime("%Y-%m-%d")
-        rango_txt = list(MESES.keys())[mes - 1].capitalize()
+        mes_nombre = list(MESES.keys())[mes - 1].capitalize()
+        if mes_fin and mes_fin != mes:
+            mes_nombre += f"/{list(MESES.keys())[mes_fin - 1].capitalize()}"
+        rango_txt = mes_nombre
     else:
-        desde = datetime.today().strftime("%Y-%m-%d")
-        hasta = (datetime.today() + timedelta(days=60)).strftime("%Y-%m-%d")
+        desde = now.strftime("%Y-%m-%d")
+        hasta = (now + timedelta(days=60)).strftime("%Y-%m-%d")
         rango_txt = "los próximos 60 días"
 
     loading = f"{random.choice(MENSAJES_BUSCANDO)}"
@@ -535,8 +588,8 @@ def process_text(chat_id, message_id, text, edit_msg_id=None):
             if origen:
                 user_states.pop(chat_id, None)
                 do_fechas(chat_id, message_id, origen, state["destino"],
-                          mes=state.get("mes"), duracion=state.get("duracion", 3),
-                          edit_msg_id=edit_msg_id)
+                          mes=state.get("mes"), mes_fin=state.get("mes_fin"),
+                          duracion=state.get("duracion", 3), edit_msg_id=edit_msg_id)
             else:
                 send_or_edit(
                     chat_id, message_id,
@@ -574,6 +627,7 @@ def process_text(chat_id, message_id, text, edit_msg_id=None):
             chat_id, message_id,
             parsed["origen"], parsed["destino"],
             mes=parsed.get("mes"),
+            mes_fin=parsed.get("mes_fin"),
             duracion=parsed.get("duracion", 3),
             edit_msg_id=edit_msg_id,
         )
@@ -582,11 +636,13 @@ def process_text(chat_id, message_id, text, edit_msg_id=None):
     # ── Solo detecté un destino → preguntar origen ──────────────────────────
     single = find_single_city(text.lower())
     if single:
+        meses_msg = [num for nombre, num in MESES.items() if re.search(rf'\b{nombre}\b', text.lower())]
         user_states[chat_id] = {
             "step": "ask_origen",
             "destino": single,
-            "mes": next((num for nombre, num in MESES.items() if nombre in text.lower()), None),
-            "duracion": 7 if "semana" in text.lower() else 3,
+            "mes": min(meses_msg) if meses_msg else None,
+            "mes_fin": max(meses_msg) if len(meses_msg) > 1 else (min(meses_msg) if meses_msg else None),
+            "duracion": 14 if "dos semanas" in text.lower() else 7 if "semana" in text.lower() else 3,
         }
         send_or_edit(
             chat_id, message_id,
