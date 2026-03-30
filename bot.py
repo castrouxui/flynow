@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.parse
 from datetime import datetime, timedelta
 import telebot
 import requests
@@ -22,14 +23,17 @@ bot = telebot.TeleBot(TOKEN)
 ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 db = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
-# Historial de conversación por usuario { chat_id: [ {role, content}, ... ] }
+# Historial de conversación en memoria { chat_id: [{role, content}, ...] }
 histories: dict = {}
-MAX_HISTORY = 12  # últimos N mensajes
+MAX_HISTORY = 12
+
+# Búsquedas pendientes de confirmación { chat_id: {tipo, params} }
+pending_searches: dict = {}
 
 
 # ── Prompt del sistema ────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = f"""Sos Flynow, el mejor asistente de viajes del mundo. Hablás en español rioplatense (argentino): usás "vos", "te", "podés", "querés", etc. Sos cálido, entusiasta, conciso y muy útil.
+SYSTEM_PROMPT_BASE = """Sos Flynow, el mejor asistente de viajes del mundo. Hablás en español rioplatense (argentino): usás "vos", "te", "podés", "querés", etc. Sos cálido, entusiasta, conciso y muy útil.
 
 Tu especialidad es encontrar vuelos baratos, pero también asesorás sobre:
 - Clima y mejor época para visitar destinos
@@ -41,8 +45,17 @@ Tu especialidad es encontrar vuelos baratos, pero también asesorás sobre:
 Cuando el usuario quiera buscar vuelos o fechas baratas, usás las herramientas disponibles.
 Siempre convertís nombres de ciudades, regiones y países a códigos IATA correctos.
 Si el usuario menciona una región o país (ej: "Brasil", "Europa"), elegís el aeropuerto principal más relevante.
-Si falta el origen, preguntás desde qué ciudad sale el usuario.
 Si el usuario menciona cantidad de personas (ej: "con 3 amigos", "somos 4"), multiplicás el precio total y lo aclarás.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FLUJO DE BÚSQUEDA — MUY IMPORTANTE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Cuando te falte info (origen, mes, duración, personas), usá `preguntar_con_opciones` con botones — NUNCA hagas la pregunta en texto.
+2. Cuando ya tenés TODOS los parámetros listos para buscar, usá `confirmar_busqueda` ANTES de buscar — esto muestra un resumen y pide OK al usuario.
+3. Si el usuario dice "sí" o confirma, la búsqueda se ejecuta automáticamente — NO llamés vos mismo a buscar_fechas_baratas o buscar_vuelos_fecha después de confirmar_busqueda.
+4. Si el usuario no sabe a dónde ir o dice "sorprendeme", "no sé", "a dónde puedo ir", usá `sorprender_destino`.
+5. Cuando el usuario mencione su ciudad de origen por primera vez, guardala con `guardar_ciudad_origen`.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CONOCIMIENTO DE AEROLÍNEAS ARGENTINAS Y PROMOCIONES
@@ -95,8 +108,24 @@ Reglas:
 - Sos breve: máximo 3-4 párrafos cuando no hay herramientas
 - Usás emojis con moderación (1-3 por mensaje)
 - Nunca dejás al usuario sin una respuesta útil
-- Hoy es {datetime.today().strftime('%d/%m/%Y')}
-"""
+- Hoy es {fecha}
+{contexto_usuario}"""
+
+
+def get_system_prompt(chat_id: int) -> str:
+    user = get_user(chat_id)
+    contexto = ""
+    if user and user.get("ciudad_origen"):
+        origen = user["ciudad_origen"]
+        nombre = user.get("nombre", "")
+        contexto = f"\nEl usuario sale habitualmente desde: {origen}. Usalo como origen por defecto si no especifica otro."
+        if nombre:
+            contexto = f"\nEl usuario se llama {nombre}." + contexto
+    return SYSTEM_PROMPT_BASE.format(
+        fecha=datetime.today().strftime('%d/%m/%Y'),
+        contexto_usuario=contexto,
+    )
+
 
 # ── Herramientas para Claude ──────────────────────────────────────────────────
 
@@ -105,7 +134,7 @@ TOOLS = [
         "name": "buscar_fechas_baratas",
         "description": (
             "Busca las fechas más baratas para volar entre dos aeropuertos en un rango de fechas. "
-            "Usar cuando el usuario quiere saber cuándo es más barato volar, sin fecha fija."
+            "IMPORTANTE: Solo llamar esto después de que el usuario haya confirmado la búsqueda via confirmar_busqueda."
         ),
         "input_schema": {
             "type": "object",
@@ -118,6 +147,47 @@ TOOLS = [
                 "pasajeros": {"type": "integer", "description": "Cantidad de pasajeros (default 1)"},
             },
             "required": ["origen", "destino", "fecha_desde", "fecha_hasta"],
+        },
+    },
+    {
+        "name": "buscar_vuelos_fecha",
+        "description": (
+            "Busca vuelos disponibles en una fecha específica entre dos aeropuertos. "
+            "IMPORTANTE: Solo llamar esto después de que el usuario haya confirmado la búsqueda via confirmar_busqueda."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "origen": {"type": "string", "description": "Código IATA origen"},
+                "destino": {"type": "string", "description": "Código IATA destino"},
+                "fecha_ida": {"type": "string", "description": "Fecha de ida YYYY-MM-DD"},
+                "fecha_vuelta": {"type": "string", "description": "Fecha de vuelta YYYY-MM-DD (opcional)"},
+                "pasajeros": {"type": "integer", "description": "Cantidad de pasajeros (default 1)"},
+            },
+            "required": ["origen", "destino", "fecha_ida"],
+        },
+    },
+    {
+        "name": "confirmar_busqueda",
+        "description": (
+            "Muestra un resumen de los parámetros de búsqueda y pide confirmación al usuario ANTES de ejecutar la búsqueda. "
+            "Usar SIEMPRE que tengas todos los datos listos para buscar vuelos o fechas baratas. "
+            "Después de llamar esto, NO llamés buscar_fechas_baratas ni buscar_vuelos_fecha — se ejecuta automáticamente si el usuario confirma."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tipo": {"type": "string", "enum": ["fechas", "vuelos"], "description": "Tipo de búsqueda"},
+                "origen": {"type": "string", "description": "Código IATA origen"},
+                "destino": {"type": "string", "description": "Código IATA destino"},
+                "fecha_desde": {"type": "string", "description": "Para tipo=fechas: YYYY-MM-DD"},
+                "fecha_hasta": {"type": "string", "description": "Para tipo=fechas: YYYY-MM-DD"},
+                "fecha_ida": {"type": "string", "description": "Para tipo=vuelos: YYYY-MM-DD"},
+                "fecha_vuelta": {"type": "string", "description": "Para tipo=vuelos: YYYY-MM-DD (opcional)"},
+                "duracion_noches": {"type": "integer", "description": "Duración del viaje en noches"},
+                "pasajeros": {"type": "integer", "description": "Cantidad de pasajeros"},
+            },
+            "required": ["tipo", "origen", "destino"],
         },
     },
     {
@@ -150,6 +220,35 @@ TOOLS = [
                 },
             },
             "required": ["pregunta", "tipo"],
+        },
+    },
+    {
+        "name": "sorprender_destino",
+        "description": (
+            "Sugiere 3 destinos al azar cuando el usuario no sabe a dónde quiere ir. "
+            "Usar cuando el usuario dice 'sorprendeme', 'no sé a dónde ir', 'a dónde me recomendás', etc."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "origen": {"type": "string", "description": "Código IATA de la ciudad de origen del usuario"},
+            },
+            "required": ["origen"],
+        },
+    },
+    {
+        "name": "guardar_ciudad_origen",
+        "description": (
+            "Guarda la ciudad de origen habitual del usuario para no preguntársela cada vez. "
+            "Llamar cuando el usuario mencione su ciudad de origen por primera vez."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "iata": {"type": "string", "description": "Código IATA de la ciudad (ej: MDZ)"},
+                "nombre": {"type": "string", "description": "Nombre legible de la ciudad (ej: Mendoza)"},
+            },
+            "required": ["iata"],
         },
     },
     {
@@ -187,24 +286,26 @@ TOOLS = [
             "required": ["alerta_id"],
         },
     },
-    {
-        "name": "buscar_vuelos_fecha",
-        "description": (
-            "Busca vuelos disponibles en una fecha específica entre dos aeropuertos."
-            "Usar cuando el usuario tiene una fecha concreta en mente."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "origen": {"type": "string", "description": "Código IATA origen"},
-                "destino": {"type": "string", "description": "Código IATA destino"},
-                "fecha_ida": {"type": "string", "description": "Fecha de ida YYYY-MM-DD"},
-                "fecha_vuelta": {"type": "string", "description": "Fecha de vuelta YYYY-MM-DD (opcional)"},
-                "pasajeros": {"type": "integer", "description": "Cantidad de pasajeros (default 1)"},
-            },
-            "required": ["origen", "destino", "fecha_ida"],
-        },
-    },
+]
+
+
+# ── Destinos sorpresa ──────────────────────────────────────────────────────────
+
+DESTINOS_SORPRESA = [
+    {"destino": "BRC", "nombre": "Bariloche",  "emoji": "🏔️", "desc": "Nieve, montañas y lagos increíbles"},
+    {"destino": "IGR", "nombre": "Iguazú",     "emoji": "💧", "desc": "Las cataratas más espectaculares del mundo"},
+    {"destino": "USH", "nombre": "Ushuaia",    "emoji": "🐧", "desc": "El fin del mundo y la Patagonia austral"},
+    {"destino": "PMY", "nombre": "Puerto Madryn","emoji": "🐳","desc": "Ballenas, pingüinos y mar patagónico"},
+    {"destino": "GRU", "nombre": "São Paulo",  "emoji": "🌆", "desc": "Gastronomía, cultura y vida nocturna"},
+    {"destino": "GIG", "nombre": "Río de Janeiro","emoji":"🌴","desc": "Carnaval, playas y el Cristo Redentor"},
+    {"destino": "SCL", "nombre": "Santiago",   "emoji": "🌋", "desc": "Ciudad vibrante con los Andes de fondo"},
+    {"destino": "MIA", "nombre": "Miami",      "emoji": "🏖️", "desc": "Playa, shopping y el sol de Florida"},
+    {"destino": "MAD", "nombre": "Madrid",     "emoji": "🇪🇸", "desc": "Europa desde Argentina, historia y tapas"},
+    {"destino": "CUN", "nombre": "Cancún",     "emoji": "🌊", "desc": "Caribe mexicano, playas turquesa y ruinas mayas"},
+    {"destino": "LIM", "nombre": "Lima",       "emoji": "🦙", "desc": "Machu Picchu y la mejor gastronomía de Sudamérica"},
+    {"destino": "BOG", "nombre": "Bogotá",     "emoji": "🌺", "desc": "Cartagena de Indias y el café colombiano"},
+    {"destino": "MVD", "nombre": "Montevideo", "emoji": "🏙️", "desc": "Ciudad tranquila, playas y buen asado uruguayo"},
+    {"destino": "VVI", "nombre": "Santa Cruz", "emoji": "🦜", "desc": "Puerta de entrada a la Amazonia boliviana"},
 ]
 
 
@@ -214,13 +315,10 @@ _dolar_cache: dict = {"ts": None, "blue": None, "oficial": None, "mep": None}
 
 
 def get_dolar() -> dict:
-    """Obtiene cotización del dólar blue, oficial y MEP desde la API de Argentina."""
     import time
     now = time.time()
-    # Cache de 15 minutos
     if _dolar_cache["ts"] and now - _dolar_cache["ts"] < 900:
         return _dolar_cache
-
     try:
         r = requests.get("https://dolarapi.com/v1/dolares", timeout=8)
         if r.status_code == 200:
@@ -237,19 +335,15 @@ def get_dolar() -> dict:
             _dolar_cache["ts"] = now
     except Exception:
         pass
-
     return _dolar_cache
 
 
 def fmt_precio_completo(usd: float, pasajeros: int = 1) -> str:
-    """Devuelve precio en USD + ARS con cotizaciones."""
     cotiz = get_dolar()
     total_usd = usd * pasajeros
-
     lines = [f"*{fmt_price(usd)} USD* por persona"]
     if pasajeros > 1:
         lines.append(f"*{fmt_price(total_usd)} USD* total ({pasajeros} personas)")
-
     if cotiz.get("blue"):
         ars_blue = total_usd * cotiz["blue"]
         lines.append(f"≈ *${fmt_price(ars_blue)} ARS* (dólar blue ${cotiz['blue']:,.0f})")
@@ -259,8 +353,59 @@ def fmt_precio_completo(usd: float, pasajeros: int = 1) -> str:
     if cotiz.get("blue") and cotiz.get("oficial"):
         ahorro = total_usd * (cotiz["blue"] - cotiz["oficial"])
         lines.append(f"💡 Pagando en USD ahorrás *${fmt_price(ahorro)} ARS* vs. pagar en pesos oficiales")
-
     return "\n".join(lines)
+
+
+# ── Supabase helpers ──────────────────────────────────────────────────────────
+
+def get_user(chat_id: int) -> dict | None:
+    if not db:
+        return None
+    try:
+        res = db.table("usuarios").select("*").eq("chat_id", chat_id).execute()
+        return res.data[0] if res.data else None
+    except Exception:
+        return None
+
+
+def save_user(chat_id: int, **kwargs):
+    if not db:
+        return
+    try:
+        kwargs["actualizado_at"] = datetime.now().isoformat()
+        existing = get_user(chat_id)
+        if existing:
+            db.table("usuarios").update(kwargs).eq("chat_id", chat_id).execute()
+        else:
+            db.table("usuarios").insert({"chat_id": chat_id, **kwargs}).execute()
+    except Exception:
+        pass
+
+
+def load_history_from_db(chat_id: int):
+    if not db or chat_id in histories:
+        return
+    try:
+        res = db.table("conversaciones").select("history").eq("chat_id", chat_id).execute()
+        if res.data and res.data[0].get("history"):
+            histories[chat_id] = res.data[0]["history"][-MAX_HISTORY:]
+    except Exception:
+        pass
+
+
+def save_history_to_db(chat_id: int):
+    if not db:
+        return
+    history = histories.get(chat_id, [])
+    try:
+        existing = db.table("conversaciones").select("chat_id").eq("chat_id", chat_id).execute()
+        payload = {"history": history[-MAX_HISTORY:], "updated_at": datetime.now().isoformat()}
+        if existing.data:
+            db.table("conversaciones").update(payload).eq("chat_id", chat_id).execute()
+        else:
+            db.table("conversaciones").insert({"chat_id": chat_id, **payload}).execute()
+    except Exception:
+        pass
 
 
 # ── fli CLI ───────────────────────────────────────────────────────────────────
@@ -312,6 +457,10 @@ MESES_ES = {
     "01": "ene", "02": "feb", "03": "mar", "04": "abr", "05": "may", "06": "jun",
     "07": "jul", "08": "ago", "09": "sep", "10": "oct", "11": "nov", "12": "dic",
 }
+NOMBRES_MESES = [
+    "", "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+]
 
 
 def fmt_date(iso: str) -> str:
@@ -332,12 +481,18 @@ def fmt_price(price: float) -> str:
 
 
 def google_flights_url(origin, dest, date, return_date=None):
-    """URL de Google Flights — formato /travel/flights con query string, funciona en todos los clientes."""
     if return_date:
         q = f"Flights+from+{origin}+to+{dest}+on+{date}+return+{return_date}"
     else:
         q = f"Flights+from+{origin}+to+{dest}+on+{date}"
     return f"https://www.google.com/travel/flights?q={q}&hl=es"
+
+
+def share_button_markup(url: str, text: str = "Mirá estos vuelos que encontré con Flynow ✈️") -> telebot.types.InlineKeyboardMarkup:
+    share_url = f"https://t.me/share/url?url={urllib.parse.quote(url, safe='')}&text={urllib.parse.quote(text, safe='')}"
+    markup = telebot.types.InlineKeyboardMarkup()
+    markup.row(telebot.types.InlineKeyboardButton("📤 Compartir", url=share_url))
+    return markup
 
 
 def execute_buscar_fechas(origen, destino, fecha_desde, fecha_hasta, duracion_noches=3, pasajeros=1) -> str:
@@ -371,7 +526,6 @@ def execute_buscar_fechas(origen, destino, fecha_desde, fecha_hasta, duracion_no
     cotiz = get_dolar()
     blue = cotiz.get("blue")
 
-    dur_txt = f"{duracion_noches} noche{'s' if duracion_noches != 1 else ''}"
     pas_txt = f" · {pasajeros} personas" if pasajeros > 1 else ""
     lines = [f"Top {len(top)} fechas más baratas ({dur_txt}, ida y vuelta{pas_txt}):\n"]
 
@@ -463,8 +617,6 @@ def execute_buscar_vuelos(origen, destino, fecha_ida, fecha_vuelta=None, pasajer
     return "\n\n".join(lines) + footer
 
 
-# ── Motor de IA ───────────────────────────────────────────────────────────────
-
 # ── Botones rápidos ───────────────────────────────────────────────────────────
 
 OPCIONES_MESES = [
@@ -493,7 +645,6 @@ def build_keyboard(tipo: str, opciones_custom: list = None) -> telebot.types.Inl
         for fila in OPCIONES_SI_NO:
             markup.row(*[telebot.types.InlineKeyboardButton(o, callback_data=f"resp:{o}") for o in fila])
     elif tipo == "custom" and opciones_custom:
-        # Agrupar en filas de 2
         row = []
         for i, op in enumerate(opciones_custom[:6]):
             row.append(telebot.types.InlineKeyboardButton(op, callback_data=f"resp:{op}"))
@@ -515,25 +666,80 @@ def execute_preguntar(chat_id: int, message_id: int, pregunta: str, tipo: str, o
     return "__pregunta_enviada__"
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("resp:"))
-def handle_button(call):
-    respuesta = call.data.replace("resp:", "")
-    # Quitar botones del mensaje original
-    try:
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
-    except Exception:
-        pass
-    # Mostrar la selección del usuario
-    bot.send_message(call.message.chat.id, f"👉 _{respuesta}_", parse_mode="Markdown")
-    # Procesar como si hubiera escrito el texto
-    handle_message(call.message.chat.id, call.message.message_id, respuesta)
-    bot.answer_callback_query(call.id)
+def execute_confirmar_busqueda(chat_id: int, tipo: str, origen: str, destino: str,
+                                fecha_desde=None, fecha_hasta=None,
+                                fecha_ida=None, fecha_vuelta=None,
+                                duracion_noches=3, pasajeros=1) -> str:
+    origen_u = origen.upper()
+    destino_u = destino.upper()
+    pas_txt = f"{pasajeros} pasajero{'s' if pasajeros > 1 else ''}"
+
+    if tipo == "fechas":
+        mes_ini = fmt_date(fecha_desde) if fecha_desde else "—"
+        mes_fin = fmt_date(fecha_hasta) if fecha_hasta else "—"
+        dur_txt = f"{duracion_noches} noche{'s' if duracion_noches != 1 else ''}"
+        card = (
+            f"🔍 *¿Arrancamos con esta búsqueda?*\n\n"
+            f"✈️  {origen_u} → {destino_u}\n"
+            f"📅  {mes_ini} – {mes_fin}\n"
+            f"🌙  Estadía: {dur_txt}\n"
+            f"👥  {pas_txt}"
+        )
+        pending_searches[chat_id] = {
+            "tipo": "fechas",
+            "params": {
+                "origen": origen_u, "destino": destino_u,
+                "fecha_desde": fecha_desde, "fecha_hasta": fecha_hasta,
+                "duracion_noches": duracion_noches, "pasajeros": pasajeros,
+            },
+        }
+    else:
+        ida_txt = fmt_date(fecha_ida) if fecha_ida else "—"
+        vuelta_txt = f"\n🔙  Vuelta: {fmt_date(fecha_vuelta)}" if fecha_vuelta else ""
+        card = (
+            f"🔍 *¿Arrancamos con esta búsqueda?*\n\n"
+            f"✈️  {origen_u} → {destino_u}\n"
+            f"📅  Ida: {ida_txt}{vuelta_txt}\n"
+            f"👥  {pas_txt}"
+        )
+        pending_searches[chat_id] = {
+            "tipo": "vuelos",
+            "params": {
+                "origen": origen_u, "destino": destino_u,
+                "fecha_ida": fecha_ida, "fecha_vuelta": fecha_vuelta,
+                "pasajeros": pasajeros,
+            },
+        }
+
+    markup = telebot.types.InlineKeyboardMarkup()
+    markup.row(
+        telebot.types.InlineKeyboardButton("✅ Sí, buscar", callback_data="confirm:si"),
+        telebot.types.InlineKeyboardButton("✏️ Modificar", callback_data="confirm:no"),
+    )
+    bot.send_message(chat_id, card, reply_markup=markup, parse_mode="Markdown")
+    return "__pregunta_enviada__"
+
+
+def execute_sorprender(chat_id: int, origen: str) -> str:
+    origen_u = origen.upper()
+    opciones = [d for d in DESTINOS_SORPRESA if d["destino"] != origen_u]
+    seleccion = random.sample(opciones, min(3, len(opciones)))
+
+    lines = ["🎲 *¡Te propongo estos destinos!* Tocá uno para buscar vuelos:\n"]
+    markup = telebot.types.InlineKeyboardMarkup()
+
+    for d in seleccion:
+        lines.append(f"{d['emoji']} *{d['nombre']}* — _{d['desc']}_")
+        markup.row(telebot.types.InlineKeyboardButton(
+            f"{d['emoji']} Buscar a {d['nombre']}",
+            callback_data=f"sorpresa:{origen_u}-{d['destino']}",
+        ))
+
+    bot.send_message(chat_id, "\n\n".join(lines), reply_markup=markup, parse_mode="Markdown")
+    return "__pregunta_enviada__"
 
 
 # ── Alertas ───────────────────────────────────────────────────────────────────
-
-_current_chat_id: int = 0  # set before each tool call
-
 
 def execute_crear_alerta(chat_id, origen, destino, precio_max_usd, duracion_noches=3, mes_inicio=None, mes_fin=None) -> str:
     if not db:
@@ -549,17 +755,32 @@ def execute_crear_alerta(chat_id, origen, destino, precio_max_usd, duracion_noch
             "mes_fin": mes_fin,
             "activa": True,
         }).execute()
-        meses_txt = ""
+
+        # Armar tarjeta de resumen
+        dur_txt = f"{duracion_noches} noche{'s' if duracion_noches != 1 else ''}"
+        meses_txt = "Todo el año"
         if mes_inicio:
-            nombres = list({"enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,
-                            "julio":7,"agosto":8,"septiembre":9,"octubre":10,"noviembre":11,"diciembre":12}.keys())
-            meses_txt = f" en {nombres[mes_inicio-1].capitalize()}"
+            meses_txt = NOMBRES_MESES[mes_inicio].capitalize()
             if mes_fin and mes_fin != mes_inicio:
-                meses_txt += f"/{nombres[mes_fin-1].capitalize()}"
+                meses_txt += f" – {NOMBRES_MESES[mes_fin].capitalize()}"
+
+        cotiz = get_dolar()
+        ars_txt = ""
+        if cotiz.get("blue"):
+            ars_equiv = precio_max_usd * cotiz["blue"]
+            ars_txt = f"\n💱  ≈ *${fmt_price(ars_equiv)} ARS* (blue actual)"
+
         return (
-            f"✅ Alerta creada: te aviso cuando {origen.upper()} → {destino.upper()} "
-            f"baje de *{fmt_price(precio_max_usd)} USD*{meses_txt}.\n"
-            f"Reviso los precios cada 2 horas 🔔"
+            f"🔔 *¡Alerta creada!*\n\n"
+            f"┌─────────────────────────\n"
+            f"│ ✈️  *{origen.upper()} → {destino.upper()}*\n"
+            f"│ 💰  Umbral: *{fmt_price(precio_max_usd)} USD* por persona{ars_txt}\n"
+            f"│ 🌙  Estadía: {dur_txt}\n"
+            f"│ 📅  Período: {meses_txt}\n"
+            f"│ 🔄  Revisión cada 2 horas\n"
+            f"└─────────────────────────\n\n"
+            f"Te aviso apenas baje de ese precio 🚀\n"
+            f"_Usá /alertas para ver o eliminar tus alertas activas._"
         )
     except Exception as e:
         return f"No pude crear la alerta: {e}"
@@ -574,14 +795,12 @@ def execute_listar_alertas(chat_id) -> str:
         if not rows:
             return "No tenés alertas activas. Podés crear una diciéndome: _\"avisame cuando MDZ-EZE baje de 50 USD\"_"
         lines = ["🔔 *Tus alertas activas:*\n"]
-        nombres_meses = list({"enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,
-                              "julio":7,"agosto":8,"septiembre":9,"octubre":10,"noviembre":11,"diciembre":12}.keys())
         for r in rows:
             mes_txt = ""
             if r.get("mes_inicio"):
-                mes_txt = f" — {nombres_meses[r['mes_inicio']-1].capitalize()}"
+                mes_txt = f" — {NOMBRES_MESES[r['mes_inicio']].capitalize()}"
                 if r.get("mes_fin") and r["mes_fin"] != r["mes_inicio"]:
-                    mes_txt += f"/{nombres_meses[r['mes_fin']-1].capitalize()}"
+                    mes_txt += f"/{NOMBRES_MESES[r['mes_fin']].capitalize()}"
             lines.append(
                 f"*#{r['id']}* {r['origen']} → {r['destino']}{mes_txt}\n"
                 f"   Precio umbral: *{fmt_price(r['precio_max_usd'])} USD*\n"
@@ -606,7 +825,6 @@ def execute_eliminar_alerta(chat_id, alerta_id) -> str:
 
 
 def check_alertas():
-    """Corre cada 2 horas: chequea precios y notifica si bajaron del umbral."""
     if not db:
         return
     try:
@@ -644,7 +862,6 @@ def check_alertas():
                     "--round", "--sort",
                 ])
 
-                # Parsear precio mínimo
                 precio_min = None
                 fecha_min = None
                 for line in raw.splitlines():
@@ -676,14 +893,14 @@ def check_alertas():
                     bot.send_message(alerta["chat_id"], msg,
                                      parse_mode="Markdown", disable_web_page_preview=True)
 
-                # Actualizar última revisión
                 db.table("alertas").update({"ultima_check": now.isoformat()}).eq("id", alerta["id"]).execute()
-
             except Exception:
                 continue
     except Exception:
         pass
 
+
+# ── Motor de IA ───────────────────────────────────────────────────────────────
 
 def run_tool(name: str, inputs: dict, chat_id: int = 0, message_id: int = 0) -> str:
     if name == "buscar_fechas_baratas":
@@ -699,12 +916,29 @@ def run_tool(name: str, inputs: dict, chat_id: int = 0, message_id: int = 0) -> 
             inputs["fecha_ida"], inputs.get("fecha_vuelta"),
             inputs.get("pasajeros", 1),
         )
+    if name == "confirmar_busqueda":
+        return execute_confirmar_busqueda(
+            chat_id,
+            inputs["tipo"], inputs["origen"], inputs["destino"],
+            fecha_desde=inputs.get("fecha_desde"),
+            fecha_hasta=inputs.get("fecha_hasta"),
+            fecha_ida=inputs.get("fecha_ida"),
+            fecha_vuelta=inputs.get("fecha_vuelta"),
+            duracion_noches=inputs.get("duracion_noches", 3),
+            pasajeros=inputs.get("pasajeros", 1),
+        )
     if name == "preguntar_con_opciones":
         return execute_preguntar(
             chat_id, message_id,
             inputs["pregunta"], inputs["tipo"],
             inputs.get("opciones_custom"),
         )
+    if name == "sorprender_destino":
+        return execute_sorprender(chat_id, inputs["origen"])
+    if name == "guardar_ciudad_origen":
+        save_user(chat_id, ciudad_origen=inputs["iata"].upper())
+        nombre = inputs.get("nombre", inputs["iata"])
+        return f"✅ Guardé que salís desde {nombre} ({inputs['iata'].upper()}). De ahora en más lo uso como origen por defecto 🏠"
     if name == "crear_alerta_precio":
         return execute_crear_alerta(
             chat_id,
@@ -721,47 +955,54 @@ def run_tool(name: str, inputs: dict, chat_id: int = 0, message_id: int = 0) -> 
 
 
 def chat_with_ai(chat_id: int, user_text: str, message_id: int = 0) -> str:
-    """Send message to Claude, handle tool calls, return final text response."""
     if not ai:
         return None
+
+    # Cargar historial persistente (solo la primera vez en esta sesión)
+    load_history_from_db(chat_id)
 
     history = histories.setdefault(chat_id, [])
     history.append({"role": "user", "content": user_text})
 
-    # Keep history bounded
     if len(history) > MAX_HISTORY:
         history[:] = history[-MAX_HISTORY:]
 
     messages = list(history)
+    system = get_system_prompt(chat_id)
 
-    for _ in range(5):  # max tool call rounds
+    for _ in range(5):
         response = ai.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=system,
             tools=TOOLS,
             messages=messages,
         )
 
         if response.stop_reason == "end_turn":
-            # Final text response
             text = next((b.text for b in response.content if hasattr(b, "text")), "")
             history.append({"role": "assistant", "content": text})
+            save_history_to_db(chat_id)
             return text
 
         if response.stop_reason == "tool_use":
-            # Execute each tool call
             tool_results = []
+            pregunta_enviada = False
             for block in response.content:
                 if block.type == "tool_use":
                     result = run_tool(block.name, block.input, chat_id=chat_id, message_id=message_id)
+                    if result == "__pregunta_enviada__":
+                        pregunta_enviada = True
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
                         "content": result,
                     })
 
-            # Add assistant response and tool results to messages
+            if pregunta_enviada:
+                save_history_to_db(chat_id)
+                return "__pregunta_enviada__"
+
             messages.append({"role": "assistant", "content": response.content})
             messages.append({"role": "user", "content": tool_results})
             continue
@@ -815,54 +1056,197 @@ LOADING_MSGS = [
 ]
 
 
+def send_result(chat_id: int, message_id: int, text: str):
+    """Envía o edita un mensaje de resultado, agregando botón compartir si hay link de vuelos."""
+    gf_match = re.search(r'(https://www\.google\.com/travel/flights[^\s\)]+)', text)
+    markup = share_button_markup(gf_match.group(1)) if gf_match else None
+    bot.send_message(
+        chat_id, text,
+        parse_mode="Markdown", disable_web_page_preview=True,
+        reply_markup=markup,
+    )
+
+
 def handle_message(chat_id, message_id, text):
     msg = bot.send_message(chat_id, random.choice(LOADING_MSGS),
                            reply_to_message_id=message_id)
     try:
         response = chat_with_ai(chat_id, text, message_id=message_id)
         if not response or response == "__pregunta_enviada__":
-            # Si Claude usó preguntar_con_opciones, el mensaje ya fue enviado
             try:
                 bot.delete_message(chat_id, msg.message_id)
             except Exception:
                 pass
             return
 
+        # Agregar botón "Compartir" si la respuesta tiene un link de Google Flights
+        gf_match = re.search(r'(https://www\.google\.com/travel/flights[^\s\)]+)', response)
+        markup = share_button_markup(gf_match.group(1)) if gf_match else None
+
         bot.edit_message_text(
             response,
             chat_id=chat_id, message_id=msg.message_id,
             parse_mode="Markdown", disable_web_page_preview=True,
+            reply_markup=markup,
         )
-    except Exception as e:
+    except Exception:
         bot.edit_message_text(
             "Ups, algo falló 😕 Intentá de nuevo en un momento.",
             chat_id=chat_id, message_id=msg.message_id,
         )
 
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm:"))
+def handle_confirm(call):
+    action = call.data.split(":", 1)[1]
+    try:
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+
+    chat_id = call.message.chat.id
+
+    if action == "si":
+        pending = pending_searches.pop(chat_id, None)
+        if not pending:
+            bot.send_message(chat_id, "La búsqueda expiró 😅 Volvé a pedirla.")
+            bot.answer_callback_query(call.id)
+            return
+
+        bot.send_message(chat_id, random.choice(LOADING_MSGS))
+        if pending["tipo"] == "fechas":
+            result = execute_buscar_fechas(**pending["params"])
+        else:
+            result = execute_buscar_vuelos(**pending["params"])
+
+        send_result(chat_id, call.message.message_id, result)
+    else:
+        pending_searches.pop(chat_id, None)
+        bot.send_message(chat_id, "Ok, ¿qué cambiamos? 🔄 Decime qué querés ajustar.",
+                         parse_mode="Markdown")
+
+    bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("sorpresa:"))
+def handle_sorpresa(call):
+    try:
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+
+    parts = call.data.replace("sorpresa:", "").split("-")
+    if len(parts) < 2:
+        bot.answer_callback_query(call.id)
+        return
+
+    origen, destino = parts[0], parts[1]
+    bot.send_message(call.message.chat.id, f"👉 _Buscar vuelos a {destino}_", parse_mode="Markdown")
+    handle_message(
+        call.message.chat.id,
+        call.message.message_id,
+        f"quiero ver fechas baratas de {origen} a {destino} para los próximos 3 meses",
+    )
+    bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("resp:"))
+def handle_button(call):
+    respuesta = call.data.replace("resp:", "")
+    try:
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+    bot.send_message(call.message.chat.id, f"👉 _{respuesta}_", parse_mode="Markdown")
+    handle_message(call.message.chat.id, call.message.message_id, respuesta)
+    bot.answer_callback_query(call.id)
+
+
 @bot.message_handler(commands=["start"])
 def cmd_start(message):
+    chat_id = message.chat.id
     nombre = message.from_user.first_name or "viajero"
-    histories.pop(message.chat.id, None)  # reset history on start
-    bot.send_message(
-        message.chat.id,
+    histories.pop(chat_id, None)  # reset in-memory history
+
+    # Guardar nombre del usuario
+    save_user(chat_id, nombre=nombre)
+
+    # Verificar si ya tiene ciudad de origen guardada
+    user = get_user(chat_id)
+    tiene_origen = user and user.get("ciudad_origen")
+
+    saludo = (
         f"¡Hola, {nombre}! 👋 Soy *Flynow*, tu asistente de viajes. ✈️\n\n"
         f"Puedo ayudarte con:\n"
         f"• 🔍 Buscar vuelos baratos\n"
         f"• 📅 Encontrar las fechas más económicas\n"
-        f"• 🌦️ Info sobre clima en cada destino\n"
+        f"• 🌦️ Info sobre clima y destinos\n"
         f"• 🛂 Requisitos de visa para argentinos\n"
-        f"• 🗺️ Consejos de viaje, zonas, presupuesto\n\n"
+        f"• 🔔 Alertas cuando bajen los precios\n\n"
         f"Escribime o mandame un 🎙️ *audio* — hablame como si fuera un amigo.\n\n"
-        f"¿A dónde soñás viajar? 🌍",
-        parse_mode="Markdown",
+        f"¿A dónde soñás viajar? 🌍"
     )
+    bot.send_message(chat_id, saludo, parse_mode="Markdown")
+
+    # Onboarding: si es la primera vez, preguntar ciudad de origen
+    if not tiene_origen:
+        markup = telebot.types.InlineKeyboardMarkup()
+        markup.row(
+            telebot.types.InlineKeyboardButton("🏙️ Buenos Aires", callback_data="origen:EZE"),
+            telebot.types.InlineKeyboardButton("🍷 Mendoza", callback_data="origen:MDZ"),
+        )
+        markup.row(
+            telebot.types.InlineKeyboardButton("🌿 Córdoba", callback_data="origen:COR"),
+            telebot.types.InlineKeyboardButton("🌊 Rosario", callback_data="origen:ROS"),
+        )
+        markup.row(
+            telebot.types.InlineKeyboardButton("✈️ Otra ciudad", callback_data="origen:otra"),
+        )
+        bot.send_message(
+            chat_id,
+            "Antes de empezar: ¿desde qué ciudad solés volar? Así no te lo pregunto cada vez 😊",
+            reply_markup=markup,
+            parse_mode="Markdown",
+        )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("origen:"))
+def handle_origen(call):
+    iata = call.data.replace("origen:", "")
+    chat_id = call.message.chat.id
+    try:
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+
+    nombres = {"EZE": "Buenos Aires", "MDZ": "Mendoza", "COR": "Córdoba", "ROS": "Rosario"}
+
+    if iata == "otra":
+        bot.send_message(chat_id, "¿Desde qué ciudad volás habitualmente? Escribime el nombre 🏙️")
+    else:
+        save_user(chat_id, ciudad_origen=iata)
+        nombre_ciudad = nombres.get(iata, iata)
+        bot.send_message(
+            chat_id,
+            f"¡Perfecto! Guardé *{nombre_ciudad}* como tu ciudad de origen 🏠\n"
+            f"La próxima vez que busques vuelos, la uso automáticamente. ¡Ahora sí, contame a dónde querés ir! ✈️",
+            parse_mode="Markdown",
+        )
+
+    bot.answer_callback_query(call.id)
 
 
 @bot.message_handler(commands=["reset", "nuevo"])
 def cmd_reset(message):
     histories.pop(message.chat.id, None)
+    pending_searches.pop(message.chat.id, None)
     bot.reply_to(message, "Listo, empezamos de cero 🔄 ¿A dónde querés ir?")
+
+
+@bot.message_handler(commands=["alertas"])
+def cmd_alertas(message):
+    result = execute_listar_alertas(message.chat.id)
+    bot.send_message(message.chat.id, result, parse_mode="Markdown")
 
 
 @bot.message_handler(commands=["help", "ayuda"])
@@ -873,11 +1257,14 @@ def cmd_help(message):
         "Hablame como si le hablaras a un amigo, por ejemplo:\n\n"
         "• _\"quiero ir a Brasil 10 días en julio\"_\n"
         "• _\"fechas baratas de mendoza a miami\"_\n"
+        "• _\"sorprendeme, no sé a dónde ir\"_\n"
         "• _\"¿necesito visa para Europa?\"_\n"
-        "• _\"¿cuándo es mejor ir a Bangkok?\"_\n"
-        "• _\"vuelos mdz eze el 15 de abril\"_\n\n"
+        "• _\"avisame cuando EZE-MIA baje de 400 USD\"_\n\n"
         "También podés mandarme un 🎙️ *audio* y te entiendo igual.\n\n"
-        "Usá /reset para empezar una nueva conversación.",
+        "Comandos:\n"
+        "/reset — nueva conversación\n"
+        "/alertas — ver alertas activas\n"
+        "/ayuda — este mensaje",
         parse_mode="Markdown",
     )
 
@@ -922,10 +1309,15 @@ def handle_voice(message):
             except Exception:
                 pass
             return
+
+        gf_match = re.search(r'(https://www\.google\.com/travel/flights[^\s\)]+)', response)
+        markup = share_button_markup(gf_match.group(1)) if gf_match else None
+
         bot.edit_message_text(
             f"🎙️ _\"{text}\"_\n\n{response}",
             chat_id=message.chat.id, message_id=msg.message_id,
             parse_mode="Markdown", disable_web_page_preview=True,
+            reply_markup=markup,
         )
     except Exception:
         bot.edit_message_text("Ups, algo falló 😕 Intentá de nuevo.",
@@ -947,9 +1339,8 @@ def handle_other(message):
 
 
 if __name__ == "__main__":
-    # Iniciar scheduler de alertas cada 2 horas
     scheduler = BackgroundScheduler(timezone="America/Argentina/Buenos_Aires")
     scheduler.add_job(check_alertas, "interval", hours=2, id="check_alertas")
     scheduler.start()
-    print("Bot iniciado con IA y alertas de precio activas 🔔")
+    print("Bot iniciado con IA, alertas de precio y memoria persistente 🔔")
     bot.infinity_polling()
