@@ -9,13 +9,18 @@ from datetime import datetime, timedelta
 import telebot
 import requests
 import anthropic
+from apscheduler.schedulers.background import BackgroundScheduler
+from supabase import create_client
 
 TOKEN = os.environ["BOT_TOKEN"]
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 bot = telebot.TeleBot(TOKEN)
 ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+db = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 # Historial de conversación por usuario { chat_id: [ {role, content}, ... ] }
 histories: dict = {}
@@ -113,6 +118,41 @@ TOOLS = [
                 "pasajeros": {"type": "integer", "description": "Cantidad de pasajeros (default 1)"},
             },
             "required": ["origen", "destino", "fecha_desde", "fecha_hasta"],
+        },
+    },
+    {
+        "name": "crear_alerta_precio",
+        "description": (
+            "Crea una alerta para notificar al usuario cuando el precio de un vuelo baje de un umbral. "
+            "Usar cuando el usuario diga 'avisame si baja de X', 'crear alerta', 'notificame cuando esté barato', etc."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "origen": {"type": "string", "description": "Código IATA origen"},
+                "destino": {"type": "string", "description": "Código IATA destino"},
+                "precio_max_usd": {"type": "number", "description": "Precio máximo en USD por persona"},
+                "duracion_noches": {"type": "integer", "description": "Duración del viaje en noches (default 3)"},
+                "mes_inicio": {"type": "integer", "description": "Mes inicio para buscar (1-12, opcional)"},
+                "mes_fin": {"type": "integer", "description": "Mes fin para buscar (1-12, opcional)"},
+            },
+            "required": ["origen", "destino", "precio_max_usd"],
+        },
+    },
+    {
+        "name": "listar_alertas",
+        "description": "Lista las alertas de precio activas del usuario.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "eliminar_alerta",
+        "description": "Elimina/desactiva una alerta de precio por su ID.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "alerta_id": {"type": "integer", "description": "ID de la alerta a eliminar"},
+            },
+            "required": ["alerta_id"],
         },
     },
     {
@@ -393,7 +433,162 @@ def execute_buscar_vuelos(origen, destino, fecha_ida, fecha_vuelta=None, pasajer
 
 # ── Motor de IA ───────────────────────────────────────────────────────────────
 
-def run_tool(name: str, inputs: dict) -> str:
+# ── Alertas ───────────────────────────────────────────────────────────────────
+
+_current_chat_id: int = 0  # set before each tool call
+
+
+def execute_crear_alerta(chat_id, origen, destino, precio_max_usd, duracion_noches=3, mes_inicio=None, mes_fin=None) -> str:
+    if not db:
+        return "Base de datos no configurada. Contactá al administrador."
+    try:
+        db.table("alertas").insert({
+            "chat_id": chat_id,
+            "origen": origen.upper(),
+            "destino": destino.upper(),
+            "precio_max_usd": precio_max_usd,
+            "duracion_noches": duracion_noches,
+            "mes_inicio": mes_inicio,
+            "mes_fin": mes_fin,
+            "activa": True,
+        }).execute()
+        meses_txt = ""
+        if mes_inicio:
+            nombres = list({"enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,
+                            "julio":7,"agosto":8,"septiembre":9,"octubre":10,"noviembre":11,"diciembre":12}.keys())
+            meses_txt = f" en {nombres[mes_inicio-1].capitalize()}"
+            if mes_fin and mes_fin != mes_inicio:
+                meses_txt += f"/{nombres[mes_fin-1].capitalize()}"
+        return (
+            f"✅ Alerta creada: te aviso cuando {origen.upper()} → {destino.upper()} "
+            f"baje de *{fmt_price(precio_max_usd)} USD*{meses_txt}.\n"
+            f"Reviso los precios cada 2 horas 🔔"
+        )
+    except Exception as e:
+        return f"No pude crear la alerta: {e}"
+
+
+def execute_listar_alertas(chat_id) -> str:
+    if not db:
+        return "Base de datos no configurada."
+    try:
+        res = db.table("alertas").select("*").eq("chat_id", chat_id).eq("activa", True).execute()
+        rows = res.data
+        if not rows:
+            return "No tenés alertas activas. Podés crear una diciéndome: _\"avisame cuando MDZ-EZE baje de 50 USD\"_"
+        lines = ["🔔 *Tus alertas activas:*\n"]
+        nombres_meses = list({"enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,
+                              "julio":7,"agosto":8,"septiembre":9,"octubre":10,"noviembre":11,"diciembre":12}.keys())
+        for r in rows:
+            mes_txt = ""
+            if r.get("mes_inicio"):
+                mes_txt = f" — {nombres_meses[r['mes_inicio']-1].capitalize()}"
+                if r.get("mes_fin") and r["mes_fin"] != r["mes_inicio"]:
+                    mes_txt += f"/{nombres_meses[r['mes_fin']-1].capitalize()}"
+            lines.append(
+                f"*#{r['id']}* {r['origen']} → {r['destino']}{mes_txt}\n"
+                f"   Precio umbral: *{fmt_price(r['precio_max_usd'])} USD*\n"
+                f"   Duración: {r['duracion_noches']} noches"
+            )
+        lines.append("\nPara eliminar una: _\"eliminar alerta #ID\"_")
+        return "\n\n".join(lines)
+    except Exception as e:
+        return f"No pude obtener las alertas: {e}"
+
+
+def execute_eliminar_alerta(chat_id, alerta_id) -> str:
+    if not db:
+        return "Base de datos no configurada."
+    try:
+        res = db.table("alertas").update({"activa": False}).eq("id", alerta_id).eq("chat_id", chat_id).execute()
+        if res.data:
+            return f"✅ Alerta #{alerta_id} eliminada."
+        return f"No encontré la alerta #{alerta_id} entre tus alertas activas."
+    except Exception as e:
+        return f"No pude eliminar la alerta: {e}"
+
+
+def check_alertas():
+    """Corre cada 2 horas: chequea precios y notifica si bajaron del umbral."""
+    if not db:
+        return
+    try:
+        res = db.table("alertas").select("*").eq("activa", True).execute()
+        alertas = res.data
+        if not alertas:
+            return
+
+        now = datetime.now()
+        for alerta in alertas:
+            try:
+                origen = alerta["origen"]
+                destino = alerta["destino"]
+                precio_max = float(alerta["precio_max_usd"])
+                duracion = alerta.get("duracion_noches", 3)
+                mes_ini = alerta.get("mes_inicio")
+
+                if mes_ini:
+                    year = now.year
+                    if mes_ini < now.month:
+                        year += 1
+                    desde = datetime(year, mes_ini, 1).strftime("%Y-%m-%d")
+                    mes_end = alerta.get("mes_fin") or mes_ini
+                    hasta_dt = datetime(year + 1, 1, 1) - timedelta(days=1) if mes_end == 12 \
+                        else datetime(year, mes_end + 1, 1) - timedelta(days=1)
+                    hasta = hasta_dt.strftime("%Y-%m-%d")
+                else:
+                    desde = now.strftime("%Y-%m-%d")
+                    hasta = (now + timedelta(days=60)).strftime("%Y-%m-%d")
+
+                raw = run_fli_text([
+                    "dates", origen, destino,
+                    "--from", desde, "--to", hasta,
+                    "--duration", str(duracion),
+                    "--round", "--sort",
+                ])
+
+                # Parsear precio mínimo
+                precio_min = None
+                fecha_min = None
+                for line in raw.splitlines():
+                    m = re.match(
+                        r'\s*[│|╭╰├]\s*(\d{4}-\d{2}-\d{2})\s*[│|]\s*\w+\s*[│|]\s*(\d{4}-\d{2}-\d{2})\s*[│|]\s*\w+\s*[│|]\s*\$?([\d,\.]+)',
+                        line
+                    )
+                    if m:
+                        dep, ret, price_raw = m.group(1), m.group(2), m.group(3)
+                        price = float(price_raw.replace(",", ""))
+                        if precio_min is None or price < precio_min:
+                            precio_min = price
+                            fecha_min = (dep, ret)
+
+                if precio_min and precio_min <= precio_max and fecha_min:
+                    link = google_flights_url(origen, destino, fecha_min[0], fecha_min[1])
+                    cotiz = get_dolar()
+                    blue = cotiz.get("blue")
+                    ars_txt = f" ≈ *${fmt_price(precio_min * blue)} ARS*" if blue else ""
+
+                    msg = (
+                        f"🚨 *¡Alerta de precio!* 🚨\n\n"
+                        f"✈️ *{origen} → {destino}*\n"
+                        f"💰 *{fmt_price(precio_min)} USD*{ars_txt} — por debajo de tu umbral de {fmt_price(precio_max)} USD\n"
+                        f"📅 {fmt_date(fecha_min[0])} → {fmt_date(fecha_min[1])} ({duracion} noches)\n\n"
+                        f"[Reservar ahora →]({link})\n\n"
+                        f"_¡Los precios cambian rápido, no lo dejes para después!_ ⏰"
+                    )
+                    bot.send_message(alerta["chat_id"], msg,
+                                     parse_mode="Markdown", disable_web_page_preview=True)
+
+                # Actualizar última revisión
+                db.table("alertas").update({"ultima_check": now.isoformat()}).eq("id", alerta["id"]).execute()
+
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
+def run_tool(name: str, inputs: dict, chat_id: int = 0) -> str:
     if name == "buscar_fechas_baratas":
         return execute_buscar_fechas(
             inputs["origen"], inputs["destino"],
@@ -407,6 +602,18 @@ def run_tool(name: str, inputs: dict) -> str:
             inputs["fecha_ida"], inputs.get("fecha_vuelta"),
             inputs.get("pasajeros", 1),
         )
+    if name == "crear_alerta_precio":
+        return execute_crear_alerta(
+            chat_id,
+            inputs["origen"], inputs["destino"],
+            inputs["precio_max_usd"],
+            inputs.get("duracion_noches", 3),
+            inputs.get("mes_inicio"), inputs.get("mes_fin"),
+        )
+    if name == "listar_alertas":
+        return execute_listar_alertas(chat_id)
+    if name == "eliminar_alerta":
+        return execute_eliminar_alerta(chat_id, inputs["alerta_id"])
     return "Herramienta desconocida."
 
 
@@ -444,7 +651,7 @@ def chat_with_ai(chat_id: int, user_text: str) -> str:
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
-                    result = run_tool(block.name, block.input)
+                    result = run_tool(block.name, block.input, chat_id=chat_id)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -628,5 +835,9 @@ def handle_other(message):
 
 
 if __name__ == "__main__":
-    print("Bot iniciado con IA...")
+    # Iniciar scheduler de alertas cada 2 horas
+    scheduler = BackgroundScheduler(timezone="America/Argentina/Buenos_Aires")
+    scheduler.add_job(check_alertas, "interval", hours=2, id="check_alertas")
+    scheduler.start()
+    print("Bot iniciado con IA y alertas de precio activas 🔔")
     bot.infinity_polling()
