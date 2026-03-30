@@ -5,8 +5,11 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 import telebot
+import requests
 
 TOKEN = os.environ["BOT_TOKEN"]
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+
 bot = telebot.TeleBot(TOKEN)
 
 # Ciudades/países → código IATA
@@ -35,6 +38,12 @@ CIUDAD_A_IATA = {
     "tokio": "NRT", "tokyo": "NRT", "nrt": "NRT",
     "amsterdam": "AMS", "ams": "AMS",
     "frankfurt": "FRA", "fra": "FRA",
+    "orlando": "MCO", "mco": "MCO",
+    "los angeles": "LAX", "lax": "LAX",
+    "toronto": "YYZ", "yyz": "YYZ",
+    "ciudad de mexico": "MEX", "mexico": "MEX", "mex": "MEX",
+    "tenerife": "TFN", "tfn": "TFN",
+    "lisboa": "LIS", "lisbon": "LIS", "lis": "LIS",
 }
 
 MESES = {
@@ -46,18 +55,16 @@ MESES = {
 HELP_TEXT = """
 ✈️ *Buscador de Vuelos*
 
-Podés escribirme de forma natural:
+Escribime de forma natural o mandame un audio 🎙️:
 
 _"vuelos de mendoza a barcelona en mayo"_
 _"quiero ir a madrid desde mendoza, 7 días"_
 _"fechas baratas mdz eze"_
-_"mdz miami junio"_
+_"mendoza miami junio semana"_
 
-O usar comandos:
+O usá comandos:
 */vuelos* `MDZ EZE 2026-04-15`
 */fechas* `MDZ BCN 90 7`
-
-Aeropuertos: `EZE` Ezeiza · `AEP` Aeroparque · `MDZ` Mendoza · `BCN` Barcelona · `MAD` Madrid · `MIA` Miami
 """
 
 
@@ -66,31 +73,23 @@ def strip_ansi(text):
 
 
 def find_fli():
-    """Find the fli executable."""
-    # Try fli in PATH first
     fli = shutil.which("fli")
     if fli:
         return [fli]
-    # Try common venv locations
     for candidate in ["/opt/venv/bin/fli", os.path.expanduser("~/.local/bin/fli")]:
         if os.path.isfile(candidate):
             return [candidate]
-    # Fall back to python -m fli
     return [sys.executable, "-m", "fli"]
 
 
 def run_fli(args: list, timeout=60) -> str:
     try:
-        cmd = find_fli() + args
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+            find_fli() + args,
+            capture_output=True, text=True, timeout=timeout,
             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
-        output = result.stdout or result.stderr
-        return strip_ansi(output).strip()
+        return strip_ansi((result.stdout or result.stderr)).strip()
     except subprocess.TimeoutExpired:
         return "⏱ La búsqueda tardó demasiado. Intentá con un rango más corto."
     except Exception as e:
@@ -98,10 +97,8 @@ def run_fli(args: list, timeout=60) -> str:
 
 
 def format_output(raw: str) -> str:
-    """Keep only the results table, drop the ASCII price chart."""
     lines = raw.splitlines()
-    table_lines = []
-    in_table = False
+    table_lines, in_table = [], False
     for line in lines:
         if "Cheapest Dates" in line or "Flight Results" in line:
             in_table = True
@@ -115,28 +112,18 @@ def resolve_iata(word: str) -> str | None:
 
 
 def parse_natural(text: str) -> dict | None:
-    """
-    Try to extract origen, destino, mes, duracion from free text.
-    Returns dict with keys: origen, destino, mes (optional), duracion (optional)
-    or None if can't parse.
-    """
     text_lower = text.lower()
-
-    # Find IATA codes or city names
     found_iata = []
 
-    # Try explicit 3-letter uppercase codes first
     for word in text.split():
         clean = re.sub(r'[^a-zA-Z]', '', word).upper()
         if len(clean) == 3 and clean.isalpha():
-            # Check if it resolves or looks like a valid code
             resolved = resolve_iata(clean.lower())
-            if resolved:
+            if resolved and resolved not in found_iata:
                 found_iata.append(resolved)
-            elif clean in CIUDAD_A_IATA.values():
+            elif clean in CIUDAD_A_IATA.values() and clean not in found_iata:
                 found_iata.append(clean)
 
-    # Try multi-word city names
     for city, code in sorted(CIUDAD_A_IATA.items(), key=lambda x: -len(x[0])):
         if city in text_lower and code not in found_iata:
             found_iata.append(code)
@@ -144,57 +131,78 @@ def parse_natural(text: str) -> dict | None:
     if len(found_iata) < 2:
         return None
 
-    origen, destino = found_iata[0], found_iata[1]
-
-    # Find month
     mes = None
     for nombre, num in MESES.items():
         if nombre in text_lower:
             mes = num
             break
 
-    # Find duration (número de días/noches)
     duracion = 3
-    match = re.search(r'(\d+)\s*(día|noche|dias|noches|nights?|days?)', text_lower)
+    match = re.search(r'(\d+)\s*(día|noche|dias|noches|nights?|days?|semana)', text_lower)
     if match:
-        duracion = int(match.group(1))
+        val = match.group(1)
+        unit = match.group(2)
+        duracion = int(val) * 7 if "semana" in unit else int(val)
 
-    return {"origen": origen, "destino": destino, "mes": mes, "duracion": duracion}
+    return {"origen": found_iata[0], "destino": found_iata[1], "mes": mes, "duracion": duracion}
+
+
+def transcribe_audio(file_path: str) -> str | None:
+    if not GROQ_API_KEY:
+        return None
+    try:
+        with open(file_path, "rb") as f:
+            response = requests.post(
+                "https://api.groq.com/openai/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                files={"file": (os.path.basename(file_path), f, "audio/ogg")},
+                data={"model": "whisper-large-v3", "language": "es"},
+                timeout=30,
+            )
+        if response.status_code == 200:
+            return response.json().get("text", "").strip()
+    except Exception:
+        pass
+    return None
+
+
+def download_voice(file_id: str) -> str | None:
+    try:
+        file_info = bot.get_file(file_id)
+        file_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}"
+        response = requests.get(file_url, timeout=30)
+        tmp_path = f"/tmp/voice_{file_id}.ogg"
+        with open(tmp_path, "wb") as f:
+            f.write(response.content)
+        return tmp_path
+    except Exception:
+        return None
 
 
 def do_fechas(chat_id, reply_to_id, origen, destino, mes=None, duracion=3):
     if mes:
         year = datetime.today().year
         now = datetime.today()
-        # If month already passed this year, use next year
-        if mes < now.month:
+        if mes < now.month or (mes == now.month and now.day > 20):
             year += 1
         desde = datetime(year, mes, 1).strftime("%Y-%m-%d")
-        # Last day of that month
-        if mes == 12:
-            hasta = datetime(year + 1, 1, 1) - timedelta(days=1)
-        else:
-            hasta = datetime(year, mes + 1, 1) - timedelta(days=1)
-        hasta = hasta.strftime("%Y-%m-%d")
-        rango_txt = f"en {list(MESES.keys())[mes-1].capitalize()}"
+        hasta_dt = datetime(year + 1, 1, 1) - timedelta(days=1) if mes == 12 \
+            else datetime(year, mes + 1, 1) - timedelta(days=1)
+        hasta = hasta_dt.strftime("%Y-%m-%d")
+        rango_txt = list(MESES.keys())[mes - 1].capitalize()
     else:
         desde = datetime.today().strftime("%Y-%m-%d")
         hasta = (datetime.today() + timedelta(days=60)).strftime("%Y-%m-%d")
         rango_txt = "próximos 60 días"
 
-    msg = bot.send_message(chat_id, f"🔍 Buscando fechas baratas {origen} → {destino} ({rango_txt})...",
+    msg = bot.send_message(chat_id, f"🔍 Buscando {origen} → {destino} ({rango_txt})...",
                            reply_to_message_id=reply_to_id)
     result = run_fli(["dates", origen, destino, "--from", desde, "--to", hasta,
                       "--duration", str(duracion), "--round", "--sort"])
-    output = format_output(result)
-    if not output:
-        output = "No se encontraron resultados para esa ruta."
-
+    output = format_output(result) or "No se encontraron resultados."
     bot.edit_message_text(
         f"📅 *{origen} → {destino}* — {rango_txt}, {duracion} noches\n\n```\n{output[:3800]}\n```",
-        chat_id=chat_id,
-        message_id=msg.message_id,
-        parse_mode="Markdown",
+        chat_id=chat_id, message_id=msg.message_id, parse_mode="Markdown",
     )
 
 
@@ -203,17 +211,25 @@ def do_vuelos(chat_id, reply_to_id, origen, destino, fecha_ida, fecha_vuelta=Non
     msg = bot.send_message(chat_id, f"🔍 Buscando vuelos {origen} → {destino}...",
                            reply_to_message_id=reply_to_id)
     result = run_fli(["flights", origen, destino, fecha_ida] + extra + ["--sort", "CHEAPEST"])
-    output = format_output(result)
-    if not output:
-        output = "No se encontraron vuelos para esa ruta y fecha."
-
-    label = f"{fecha_ida}" + (f" → {fecha_vuelta}" if fecha_vuelta else "")
+    output = format_output(result) or "No se encontraron vuelos."
+    label = fecha_ida + (f" → {fecha_vuelta}" if fecha_vuelta else "")
     bot.edit_message_text(
         f"✈️ *{origen} → {destino}* — {label}\n\n```\n{output[:3800]}\n```",
-        chat_id=chat_id,
-        message_id=msg.message_id,
-        parse_mode="Markdown",
+        chat_id=chat_id, message_id=msg.message_id, parse_mode="Markdown",
     )
+
+
+def process_text(chat_id, message_id, text):
+    parsed = parse_natural(text)
+    if parsed:
+        do_fechas(chat_id, message_id, parsed["origen"], parsed["destino"],
+                  mes=parsed.get("mes"), duracion=parsed.get("duracion", 3))
+    else:
+        bot.send_message(
+            chat_id,
+            "No entendí la ruta 🤔\n\nEjemplos:\n_\"mendoza barcelona mayo\"_\n_\"mdz eze junio 7 días\"_\n\nO usá /help",
+            reply_to_message_id=message_id, parse_mode="Markdown",
+        )
 
 
 # ── Handlers ────────────────────────────────────────────────────────────────
@@ -232,9 +248,8 @@ def cmd_vuelos(message):
         return
     origen = resolve_iata(parts[0]) or parts[0].upper()
     destino = resolve_iata(parts[1]) or parts[1].upper()
-    fecha_ida = parts[2]
-    fecha_vuelta = parts[3] if len(parts) >= 4 else None
-    do_vuelos(message.chat.id, message.message_id, origen, destino, fecha_ida, fecha_vuelta)
+    do_vuelos(message.chat.id, message.message_id, origen, destino, parts[2],
+              parts[3] if len(parts) >= 4 else None)
 
 
 @bot.message_handler(commands=["fechas"])
@@ -253,31 +268,38 @@ def cmd_fechas(message):
     msg = bot.reply_to(message, f"🔍 Buscando {origen} → {destino}...")
     result = run_fli(["dates", origen, destino, "--from", desde, "--to", hasta,
                       "--duration", str(duracion), "--round", "--sort"])
-    output = format_output(result)
-    if not output:
-        output = "No se encontraron resultados."
+    output = format_output(result) or "No se encontraron resultados."
     bot.edit_message_text(
         f"📅 *{origen} → {destino}* — próximos {dias} días, {duracion} noches\n\n```\n{output[:3800]}\n```",
         chat_id=message.chat.id, message_id=msg.message_id, parse_mode="Markdown",
     )
 
 
+@bot.message_handler(content_types=["voice"])
+def handle_voice(message):
+    if not GROQ_API_KEY:
+        bot.reply_to(message, "🎙️ Audio no disponible aún (falta configurar GROQ_API_KEY).")
+        return
+    msg = bot.reply_to(message, "🎙️ Transcribiendo audio...")
+    path = download_voice(message.voice.file_id)
+    if not path:
+        bot.edit_message_text("❌ No pude descargar el audio.", message.chat.id, msg.message_id)
+        return
+    text = transcribe_audio(path)
+    try:
+        os.remove(path)
+    except Exception:
+        pass
+    if not text:
+        bot.edit_message_text("❌ No pude transcribir el audio.", message.chat.id, msg.message_id)
+        return
+    bot.edit_message_text(f"🎙️ _{text}_", message.chat.id, msg.message_id, parse_mode="Markdown")
+    process_text(message.chat.id, message.message_id, text)
+
+
 @bot.message_handler(content_types=["text"])
 def handle_text(message):
-    parsed = parse_natural(message.text)
-    if parsed:
-        do_fechas(
-            message.chat.id, message.message_id,
-            parsed["origen"], parsed["destino"],
-            mes=parsed.get("mes"),
-            duracion=parsed.get("duracion", 3),
-        )
-    else:
-        bot.reply_to(
-            message,
-            "No entendí la ruta 🤔\n\nProbá con:\n_\"vuelos mendoza barcelona mayo\"_\n_\"mdz eze junio 7 días\"_\n\nO usá /help",
-            parse_mode="Markdown",
-        )
+    process_text(message.chat.id, message.message_id, message.text)
 
 
 if __name__ == "__main__":
