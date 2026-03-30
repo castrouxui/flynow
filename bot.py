@@ -110,6 +110,7 @@ TOOLS = [
                 "fecha_desde": {"type": "string", "description": "Fecha inicio del rango YYYY-MM-DD"},
                 "fecha_hasta": {"type": "string", "description": "Fecha fin del rango YYYY-MM-DD"},
                 "duracion_noches": {"type": "integer", "description": "Duración del viaje en noches (default 3)"},
+                "pasajeros": {"type": "integer", "description": "Cantidad de pasajeros (default 1)"},
             },
             "required": ["origen", "destino", "fecha_desde", "fecha_hasta"],
         },
@@ -127,11 +128,67 @@ TOOLS = [
                 "destino": {"type": "string", "description": "Código IATA destino"},
                 "fecha_ida": {"type": "string", "description": "Fecha de ida YYYY-MM-DD"},
                 "fecha_vuelta": {"type": "string", "description": "Fecha de vuelta YYYY-MM-DD (opcional)"},
+                "pasajeros": {"type": "integer", "description": "Cantidad de pasajeros (default 1)"},
             },
             "required": ["origen", "destino", "fecha_ida"],
         },
     },
 ]
+
+
+# ── Cotización del dólar ──────────────────────────────────────────────────────
+
+_dolar_cache: dict = {"ts": None, "blue": None, "oficial": None, "mep": None}
+
+
+def get_dolar() -> dict:
+    """Obtiene cotización del dólar blue, oficial y MEP desde la API de Argentina."""
+    import time
+    now = time.time()
+    # Cache de 15 minutos
+    if _dolar_cache["ts"] and now - _dolar_cache["ts"] < 900:
+        return _dolar_cache
+
+    try:
+        r = requests.get("https://dolarapi.com/v1/dolares", timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            for d in data:
+                casa = d.get("casa", "").lower()
+                venta = d.get("venta") or d.get("compra")
+                if casa == "blue":
+                    _dolar_cache["blue"] = float(venta)
+                elif casa == "oficial":
+                    _dolar_cache["oficial"] = float(venta)
+                elif casa in ("bolsa", "mep"):
+                    _dolar_cache["mep"] = float(venta)
+            _dolar_cache["ts"] = now
+    except Exception:
+        pass
+
+    return _dolar_cache
+
+
+def fmt_precio_completo(usd: float, pasajeros: int = 1) -> str:
+    """Devuelve precio en USD + ARS con cotizaciones."""
+    cotiz = get_dolar()
+    total_usd = usd * pasajeros
+
+    lines = [f"*{fmt_price(usd)} USD* por persona"]
+    if pasajeros > 1:
+        lines.append(f"*{fmt_price(total_usd)} USD* total ({pasajeros} personas)")
+
+    if cotiz.get("blue"):
+        ars_blue = total_usd * cotiz["blue"]
+        lines.append(f"≈ *${fmt_price(ars_blue)} ARS* (dólar blue ${cotiz['blue']:,.0f})")
+    if cotiz.get("oficial"):
+        ars_of = total_usd * cotiz["oficial"]
+        lines.append(f"≈ *${fmt_price(ars_of)} ARS* (dólar oficial ${cotiz['oficial']:,.0f})")
+    if cotiz.get("blue") and cotiz.get("oficial"):
+        ahorro = total_usd * (cotiz["blue"] - cotiz["oficial"])
+        lines.append(f"💡 Pagando en USD ahorrás *${fmt_price(ahorro)} ARS* vs. pagar en pesos oficiales")
+
+    return "\n".join(lines)
 
 
 # ── fli CLI ───────────────────────────────────────────────────────────────────
@@ -203,14 +260,15 @@ def fmt_price(price: float) -> str:
 
 
 def google_flights_url(origin, dest, date, return_date=None):
-    tt = "r" if return_date else "o"
-    url = f"https://www.google.com/flights#search;f={origin};t={dest};d={date};tt={tt}"
+    """URL de Google Flights — formato /travel/flights con query string, funciona en todos los clientes."""
     if return_date:
-        url += f";r={return_date}"
-    return url
+        q = f"Flights+from+{origin}+to+{dest}+on+{date}+return+{return_date}"
+    else:
+        q = f"Flights+from+{origin}+to+{dest}+on+{date}"
+    return f"https://www.google.com/travel/flights?q={q}&hl=es"
 
 
-def execute_buscar_fechas(origen, destino, fecha_desde, fecha_hasta, duracion_noches=3) -> str:
+def execute_buscar_fechas(origen, destino, fecha_desde, fecha_hasta, duracion_noches=3, pasajeros=1) -> str:
     raw = run_fli_text([
         "dates", origen, destino,
         "--from", fecha_desde, "--to", fecha_hasta,
@@ -238,26 +296,39 @@ def execute_buscar_fechas(origen, destino, fecha_desde, fecha_hasta, duracion_no
     top = rows[:10]
     dur_txt = f"{duracion_noches} noche{'s' if duracion_noches != 1 else ''}"
 
-    lines = [f"Top {len(top)} fechas más baratas ({dur_txt}, ida y vuelta):\n"]
+    cotiz = get_dolar()
+    blue = cotiz.get("blue")
+
+    dur_txt = f"{duracion_noches} noche{'s' if duracion_noches != 1 else ''}"
+    pas_txt = f" · {pasajeros} personas" if pasajeros > 1 else ""
+    lines = [f"Top {len(top)} fechas más baratas ({dur_txt}, ida y vuelta{pas_txt}):\n"]
+
     for i, (dep, dep_day, ret, ret_day, price) in enumerate(top, 1):
         medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
         dep_es = DIAS_ES.get(dep_day, dep_day)
         ret_es = DIAS_ES.get(ret_day, ret_day)
         link = google_flights_url(origen, destino, dep, ret)
+        total = price * pasajeros
+        ars_txt = f" ≈ ${fmt_price(total * blue)} ARS" if blue else ""
+        total_txt = f" ({fmt_price(total)} USD total{ars_txt})" if pasajeros > 1 else (f"{ars_txt}" if ars_txt else "")
         lines.append(
-            f"{medal} *{fmt_price(price)}* — {fmt_date(dep)} ({dep_es}) → {fmt_date(ret)} ({ret_es})\n"
-            f"   [Reservar este vuelo →]({link})"
+            f"{medal} *{fmt_price(price)} USD*{total_txt}\n"
+            f"   📅 {fmt_date(dep)} ({dep_es}) → {fmt_date(ret)} ({ret_es})\n"
+            f"   [Reservar →]({link})"
         )
 
     savings = top[-1][4] - top[0][4]
-    if savings > 100:
-        lines.append(f"\n💰 Saliendo el {fmt_date(top[0][0])} ahorrás hasta *{fmt_price(savings)}* vs la fecha más cara.")
+    if savings > 50:
+        lines.append(f"\n💰 Saliendo el {fmt_date(top[0][0])} ahorrás *{fmt_price(savings)} USD* vs la fecha más cara.")
+
+    if blue:
+        lines.append(f"💱 Cotización usada: dólar blue *${blue:,.0f}*")
 
     lines.append(f"\n💡 _¿Querés ver los vuelos de alguna de estas fechas? Decime cuál._")
     return "\n".join(lines)
 
 
-def execute_buscar_vuelos(origen, destino, fecha_ida, fecha_vuelta=None) -> str:
+def execute_buscar_vuelos(origen, destino, fecha_ida, fecha_vuelta=None, pasajeros=1) -> str:
     args = ["flights", origen, destino, fecha_ida]
     if fecha_vuelta:
         args += ["--return", fecha_vuelta]
@@ -271,9 +342,13 @@ def execute_buscar_vuelos(origen, destino, fecha_ida, fecha_vuelta=None) -> str:
     if not flights:
         return "No hay vuelos disponibles para esa ruta y fecha."
 
+    cotiz = get_dolar()
+    blue = cotiz.get("blue")
+
     lines = []
     for i, f in enumerate(flights[:5], 1):
-        price = fmt_price(f["price"])
+        usd = f["price"]
+        total_usd = usd * pasajeros
         duration = fmt_duration(f["duration"])
         stops = "Directo" if f["stops"] == 0 else f"{f['stops']} escala{'s' if f['stops'] > 1 else ''}"
         stop_icon = "🟢" if f["stops"] == 0 else "🟡"
@@ -293,14 +368,26 @@ def execute_buscar_vuelos(origen, destino, fecha_ida, fecha_vuelta=None) -> str:
         link = google_flights_url(origen, destino, fecha_ida, fecha_vuelta)
         airline_str = " / ".join(airlines) or "—"
 
+        price_line = f"*{fmt_price(usd)} USD*"
+        if pasajeros > 1:
+            price_line += f" c/u — *{fmt_price(total_usd)} USD* total"
+        if blue:
+            price_line += f"\n   ≈ *${fmt_price(total_usd * blue)} ARS* (blue ${blue:,.0f})"
+
         lines.append(
-            f"{stop_icon} *{price}* — {duration} — {stops}\n"
-            f"✈️ {airline_str}\n"
+            f"{stop_icon} {price_line}\n"
+            f"✈️ {airline_str} — {duration} — {stops}\n"
             + "\n".join(f"   {s}" for s in segments) +
-            f"\n[Reservar →]({link})"
+            f"\n[Reservar en Google Flights →]({link})"
         )
 
-    footer = "\n\n💡 _Precios de Google Flights, pueden variar al momento de comprar._"
+    ahorro_txt = ""
+    if blue and cotiz.get("oficial"):
+        usd_mas_barato = flights[0]["price"] * pasajeros
+        ahorro = usd_mas_barato * (blue - cotiz["oficial"])
+        ahorro_txt = f"\n💡 Pagando en USD ahorrás aprox. *${fmt_price(ahorro)} ARS* vs. pagar en pesos al tipo oficial."
+
+    footer = f"{ahorro_txt}\n\n_Precios de Google Flights, pueden variar al momento de comprar._"
     return "\n\n".join(lines) + footer
 
 
@@ -312,11 +399,13 @@ def run_tool(name: str, inputs: dict) -> str:
             inputs["origen"], inputs["destino"],
             inputs["fecha_desde"], inputs["fecha_hasta"],
             inputs.get("duracion_noches", 3),
+            inputs.get("pasajeros", 1),
         )
     if name == "buscar_vuelos_fecha":
         return execute_buscar_vuelos(
             inputs["origen"], inputs["destino"],
             inputs["fecha_ida"], inputs.get("fecha_vuelta"),
+            inputs.get("pasajeros", 1),
         )
     return "Herramienta desconocida."
 
