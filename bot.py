@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -12,6 +13,8 @@ TOKEN = os.environ["BOT_TOKEN"]
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 bot = telebot.TeleBot(TOKEN)
+
+# ── Datos ─────────────────────────────────────────────────────────────────────
 
 CIUDAD_A_IATA = {
     "mendoza": "MDZ", "mdz": "MDZ",
@@ -44,6 +47,12 @@ CIUDAD_A_IATA = {
     "ciudad de mexico": "MEX", "mexico": "MEX", "mex": "MEX",
     "tenerife": "TFN", "tfn": "TFN",
     "lisboa": "LIS", "lisbon": "LIS", "lis": "LIS",
+    "punta cana": "PUJ", "puj": "PUJ",
+    "maldivas": "MLE", "mle": "MLE",
+    "tokio": "HND", "haneda": "HND",
+    "sydney": "SYD", "syd": "SYD",
+    "zurich": "ZRH", "zúrich": "ZRH", "zrh": "ZRH",
+    "milan": "MXP", "milán": "MXP", "mxp": "MXP",
 }
 
 MESES = {
@@ -52,38 +61,72 @@ MESES = {
     "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
 }
 
-SALUDOS = {"hola", "buenas", "hey", "hi", "buen dia", "buen día", "buenas tardes",
-           "buenas noches", "buenos dias", "buenos días", "ola", "holaa", "holis"}
+DIAS_ES = {
+    "Monday": "Lunes", "Tuesday": "Martes", "Wednesday": "Miércoles",
+    "Thursday": "Jueves", "Friday": "Viernes", "Saturday": "Sábado", "Sunday": "Domingo",
+}
+MESES_ES = {
+    "01": "ene", "02": "feb", "03": "mar", "04": "abr", "05": "may", "06": "jun",
+    "07": "jul", "08": "ago", "09": "sep", "10": "oct", "11": "nov", "12": "dic",
+}
+
+# ── Copy / Voz del bot ────────────────────────────────────────────────────────
+
+SALUDOS = {
+    "hola", "buenas", "hey", "hi", "buen dia", "buen día", "buenas tardes",
+    "buenas noches", "buenos dias", "buenos días", "ola", "holaa", "holis",
+    "hello", "que tal", "qué tal", "como estas", "cómo estás", "buenas!",
+}
+
+AGRADECIMIENTOS = {
+    "gracias", "gracias!", "muchas gracias", "grax", "genial", "perfecto",
+    "ok gracias", "excelente", "buenisimo", "buenísimo", "re bien", "copado",
+}
 
 RESPUESTAS_SALUDO = [
-    "¡Hola! 👋 Soy Flynow, tu asistente de vuelos baratos.\n\n"
-    "Puedo ayudarte a encontrar los mejores precios. Solo contame a dónde querés ir, por ejemplo:\n\n"
+    "¡Hola! 👋 Soy *Flynow*, tu asistente para encontrar vuelos baratos.\n\n"
+    "Contame a dónde querés ir y yo me encargo de buscar los mejores precios 🔍\n\n"
+    "Por ejemplo podés decirme:\n"
     "✈️ _\"quiero ir a Barcelona en julio\"_\n"
-    "✈️ _\"vuelos de Mendoza a Miami en junio\"_\n"
-    "✈️ _\"fechas baratas para ir a Madrid\"_\n\n"
-    "También podés mandarme un 🎙️ *audio* y te entiendo igual.\n\n"
-    "¿A dónde soñás viajar? 😊",
+    "✈️ _\"fechas baratas de Mendoza a Miami\"_\n"
+    "✈️ _\"mendoza madrid una semana\"_\n\n"
+    "También entiendo audios 🎙️ ¡hablame nomás!\n\n"
+    "¿A dónde soñás viajar? 🌍",
 
-    "¡Buenas! ✈️ Acá Flynow, tu copiloto para encontrar vuelos baratos.\n\n"
-    "Contame tu plan de viaje y yo busco los mejores precios. Por ejemplo:\n\n"
-    "🗓️ _\"mendoza a ezeiza la semana que viene\"_\n"
-    "🗓️ _\"quiero una semana en Roma en agosto\"_\n\n"
-    "¿A dónde querés ir? 🌍",
+    "¡Buenas! ✈️ Soy *Flynow*.\n\n"
+    "Puedo buscar vuelos baratos en Google Flights por vos.\n\n"
+    "Solo contame el plan:\n"
+    "🗓️ _\"mendoza a ezeiza, cualquier fecha de mayo\"_\n"
+    "🗓️ _\"vuelos baratos a Roma en agosto, 10 días\"_\n\n"
+    "¿Adónde querés ir? 😊",
+
+    "¡Hey! Soy *Flynow* 🛫\n\n"
+    "Mi trabajo es conseguirte los precios más baratos. Solo decime destino y mes aproximado y me pongo a buscar.\n\n"
+    "Ejemplo: _\"quiero ir a Madrid en octubre, una semana\"_\n\n"
+    "¿Cuál es tu próximo destino? 🌎",
 ]
 
-HELP_TEXT = (
-    "✈️ *Flynow — Buscador de Vuelos*\n\n"
-    "Hablame como si le hablaras a un amigo. Entiendo texto libre y audios 🎙️\n\n"
-    "*Ejemplos:*\n"
-    "• _\"quiero ir a Barcelona en julio, una semana\"_\n"
-    "• _\"vuelos baratos de mendoza a miami en junio\"_\n"
-    "• _\"fechas baratas mdz eze\"_\n\n"
-    "*Comandos directos:*\n"
-    "• /vuelos `MDZ EZE 2026-04-15` — vuelos en fecha específica\n"
-    "• /fechas `MDZ BCN 90 7` — fechas baratas (90 días, 7 noches)\n\n"
-    "💡 *Tip:* Si no sabés el código del aeropuerto, escribí el nombre de la ciudad nomás."
-)
+RESPUESTAS_GRACIAS = [
+    "¡Con gusto! 😊 Si querés buscar otro destino, avisame.",
+    "¡Para eso estoy! ✈️ ¿Hay algo más que quieras explorar?",
+    "¡De nada! Si encontrás algo que te guste, no dejes de reservar 🎉",
+]
 
+MENSAJES_BUSCANDO = [
+    "Un momento, estoy consultando Google Flights... 🔍",
+    "Buscando los mejores precios para vos... ✈️",
+    "Revisando todas las opciones disponibles... 🗓️",
+    "Dame un segundo que esto tarda un poquito... 🔎",
+]
+
+MENSAJES_BUSCANDO_VUELO = [
+    "Buscando vuelos disponibles... ✈️",
+    "Consultando Google Flights para esa fecha... 🔍",
+    "Un momento, revisando opciones... 🗓️",
+]
+
+
+# ── Utilidades ────────────────────────────────────────────────────────────────
 
 def find_fli():
     fli = shutil.which("fli")
@@ -117,9 +160,9 @@ def run_fli_text(args: list, timeout=60) -> str:
         raw = result.stdout or result.stderr
         return re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', raw).strip()
     except subprocess.TimeoutExpired:
-        return "⏱ La búsqueda tardó demasiado. Intentá con un rango más corto."
-    except Exception as e:
-        return f"❌ Error: {e}"
+        return "__timeout__"
+    except Exception:
+        return "__error__"
 
 
 def google_flights_url(origin, dest, date, return_date=None):
@@ -146,10 +189,23 @@ def fmt_price(price: float) -> str:
     return f"${price:,.0f}".replace(",", ".")
 
 
+def fmt_date_es(iso: str) -> str:
+    try:
+        p = iso.split("-")
+        return f"{int(p[2])} {MESES_ES[p[1]]}"
+    except Exception:
+        return iso
+
+
+# ── Formatters ────────────────────────────────────────────────────────────────
+
 def format_flights(data: dict, return_date: str = None) -> str:
     flights = data.get("flights", [])
     if not flights:
-        return "No se encontraron vuelos."
+        return (
+            "No encontré vuelos para esa ruta y fecha 😕\n\n"
+            "Podés intentar con fechas cercanas o con /fechas para ver qué días son más baratos."
+        )
 
     origin = data["query"]["origin"]
     dest = data["query"]["destination"]
@@ -159,104 +215,95 @@ def format_flights(data: dict, return_date: str = None) -> str:
     for i, f in enumerate(flights[:5], 1):
         price = fmt_price(f["price"])
         duration = fmt_duration(f["duration"])
-        stops = "✈️ Directo" if f["stops"] == 0 else f"🔄 {f['stops']} escala{'s' if f['stops'] > 1 else ''}"
+        stops = "Directo" if f["stops"] == 0 else f"{f['stops']} escala{'s' if f['stops'] > 1 else ''}"
 
-        # Airline(s) — may be multiple legs
-        airlines = []
-        segments = []
+        airlines, segments = [], []
         for leg in f.get("legs", []):
-            airline = leg.get("airline", {}).get("name", "")
-            if airline and airline not in airlines:
-                airlines.append(airline)
+            name = leg.get("airline", {}).get("name", "")
+            if name and name not in airlines:
+                airlines.append(name)
             dep = fmt_time(leg.get("departure_time", ""))
             arr = fmt_time(leg.get("arrival_time", ""))
             orig = leg["departure_airport"]["code"]
             dst = leg["arrival_airport"]["code"]
             fn = leg.get("flight_number", "")
-            segments.append(f"{orig} {dep} → {dst} {arr}" + (f" ({fn})" if fn else ""))
+            segments.append(f"{orig} {dep} → {dst} {arr}" + (f"  _#{fn}_" if fn else ""))
 
         link = google_flights_url(origin, dest, dep_date, return_date)
-        airline_str = " / ".join(airlines) if airlines else "—"
+        airline_str = " / ".join(airlines) or "—"
+        stop_icon = "🟢" if f["stops"] == 0 else "🟡"
 
         lines.append(
-            f"*{i}. {price}* — {duration} — {stops}\n"
-            f"🏢 {airline_str}\n"
-            f"🕐 {chr(10).join(segments)}\n"
-            f"[🔗 Ver en Google Flights]({link})"
+            f"{stop_icon} *{price}* — {duration} — {stops}\n"
+            f"✈️ {airline_str}\n"
+            + "\n".join(f"   {s}" for s in segments) +
+            f"\n[Ver y comprar en Google Flights →]({link})"
         )
 
-    return "\n\n".join(lines)
-
-
-DIAS_ES = {
-    "Monday": "Lunes", "Tuesday": "Martes", "Wednesday": "Miércoles",
-    "Thursday": "Jueves", "Friday": "Viernes", "Saturday": "Sábado", "Sunday": "Domingo",
-}
-MESES_ES = {
-    "01": "ene", "02": "feb", "03": "mar", "04": "abr", "05": "may", "06": "jun",
-    "07": "jul", "08": "ago", "09": "sep", "10": "oct", "11": "nov", "12": "dic",
-}
-
-
-def fmt_date_es(iso: str) -> str:
-    """2026-04-16 → 16 abr"""
-    try:
-        parts = iso.split("-")
-        return f"{int(parts[2])} {MESES_ES[parts[1]]}"
-    except Exception:
-        return iso
+    footer = f"\n💡 _Precios orientativos de Google Flights. Pueden variar al momento de comprar._"
+    return "\n\n".join(lines) + footer
 
 
 def format_dates_table(raw: str, origen: str, destino: str, duracion: int) -> str:
-    """Parse the raw table and return top 10 as clean human-readable Telegram text."""
     rows = []
     for line in raw.splitlines():
-        # Match table data rows: │ 2026-04-16 │ Thursday │ 2026-04-19 │ Sunday │ $1,160.00 │
-        m = re.match(r'\s*[│|]\s*(\d{4}-\d{2}-\d{2})\s*[│|]\s*(\w+)\s*[│|]\s*(\d{4}-\d{2}-\d{2})\s*[│|]\s*(\w+)\s*[│|]\s*\$?([\d,\.]+)', line)
+        m = re.match(
+            r'\s*[│|╭╰├]\s*(\d{4}-\d{2}-\d{2})\s*[│|]\s*(\w+)\s*[│|]\s*(\d{4}-\d{2}-\d{2})\s*[│|]\s*(\w+)\s*[│|]\s*\$?([\d,\.]+)',
+            line
+        )
         if m:
             dep, dep_day, ret, ret_day, price_raw = m.groups()
             price = float(price_raw.replace(",", ""))
             rows.append((dep, dep_day, ret, ret_day, price))
 
     if not rows:
-        return raw  # fallback
+        return "No encontré fechas disponibles para esa ruta 😕\nProbá con un rango de fechas más amplio."
 
     rows.sort(key=lambda x: x[4])
     top = rows[:10]
+    cheapest = top[0]
 
-    link_base = google_flights_url(origen, destino, top[0][0], top[0][2])
-    lines = [f"🏆 *Top {len(top)} fechas más baratas* ({duracion} noches, ida y vuelta)\n"]
+    link = google_flights_url(origen, destino, cheapest[0], cheapest[2])
+
+    dur_txt = f"{duracion} noche{'s' if duracion != 1 else ''}"
+    lines = [f"Estas son las *{len(top)} fechas más baratas* para ir y volver ({dur_txt}):\n"]
+
     for i, (dep, dep_day, ret, ret_day, price) in enumerate(top, 1):
-        emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"  {i}."
         dep_es = DIAS_ES.get(dep_day, dep_day)
         ret_es = DIAS_ES.get(ret_day, ret_day)
         lines.append(
-            f"{emoji} *${price:,.0f}* — {fmt_date_es(dep)} ({dep_es}) → {fmt_date_es(ret)} ({ret_es})"
+            f"{medal} *{fmt_price(price)}* — {fmt_date_es(dep)} ({dep_es}) → {fmt_date_es(ret)} ({ret_es})"
         )
 
-    lines.append(f"\n[🔗 Ver todos en Google Flights]({link_base})")
+    savings = top[-1][4] - top[0][4]
+    if savings > 0:
+        lines.append(f"\n💰 Saliendo el {fmt_date_es(cheapest[0])} ahorrás hasta *{fmt_price(savings)}* vs la fecha más cara.")
+
+    lines.append(f"\n[Ver todos los precios en Google Flights →]({link})")
+    lines.append(f"\n💡 _¿Querés ver los vuelos de alguna fecha en particular? Decime cuál._")
     return "\n".join(lines)
 
+
+# ── NLP ───────────────────────────────────────────────────────────────────────
 
 def resolve_iata(word: str) -> str | None:
     return CIUDAD_A_IATA.get(word.lower().strip())
 
 
-def find_city_in_text(text_lower: str) -> list:
-    """Return list of IATA codes in order of appearance in text."""
-    # Build a list of (position, iata) by scanning for city names and codes
+def find_cities_in_order(text_lower: str) -> list:
     matches = []
 
-    # 3-letter codes (by word position)
-    for i, word in enumerate(text_lower.split()):
+    for word in text_lower.split():
         clean = re.sub(r'[^a-z]', '', word)
-        code = CIUDAD_A_IATA.get(clean.upper().lower()) or (clean.upper() if clean.upper() in CIUDAD_A_IATA.values() else None)
+        code = CIUDAD_A_IATA.get(clean) or CIUDAD_A_IATA.get(clean.upper().lower())
+        if not code and clean.upper() in CIUDAD_A_IATA.values():
+            code = clean.upper()
         if code:
             pos = text_lower.find(clean)
             if not any(pos == m[0] for m in matches):
                 matches.append((pos, code))
 
-    # Multi-word city names
     for city, code in sorted(CIUDAD_A_IATA.items(), key=lambda x: -len(x[0])):
         idx = text_lower.find(city)
         if idx >= 0 and not any(code == m[1] for m in matches):
@@ -269,55 +316,69 @@ def find_city_in_text(text_lower: str) -> list:
 def parse_natural(text: str) -> dict | None:
     text_lower = text.lower()
 
-    # Try "de [origin] a [dest]" pattern first
+    # "de X a Y" / "desde X hacia Y"
     patron = re.search(
-        r'(?:de|desde)\s+(.+?)\s+(?:a|hasta|para|hacia)\s+(.+?)(?:\s+en\s+|\s+para\s+|\s*$)',
+        r'(?:de|desde)\s+(.+?)\s+(?:a|hasta|para|hacia)\s+(.+?)(?:\s+en\s+|\s+para\s+|\s+el\s+|\s*$)',
         text_lower
     )
     if patron:
-        orig_str = patron.group(1).strip()
-        dest_str = patron.group(2).strip()
+        orig_str, dest_str = patron.group(1).strip(), patron.group(2).strip()
         orig_code = next((CIUDAD_A_IATA[c] for c in sorted(CIUDAD_A_IATA, key=len, reverse=True) if c in orig_str), None)
         dest_code = next((CIUDAD_A_IATA[c] for c in sorted(CIUDAD_A_IATA, key=len, reverse=True) if c in dest_str), None)
-        if orig_code and dest_code:
-            found_iata = [orig_code, dest_code]
-        else:
-            found_iata = find_city_in_text(text_lower)
+        found_iata = [orig_code, dest_code] if orig_code and dest_code else find_cities_in_order(text_lower)
     else:
-        found_iata = find_city_in_text(text_lower)
+        found_iata = find_cities_in_order(text_lower)
 
     if len(found_iata) < 2:
         return None
 
+    # Mes
     mes = None
     for nombre, num in MESES.items():
         if nombre in text_lower:
             mes = num
             break
 
+    # Duración
     duracion = 3
-    match = re.search(r'(\d+)\s*(día|noche|dias|noches|nights?|days?|semana)', text_lower)
-    if match:
-        val = int(match.group(1))
-        duracion = val * 7 if "semana" in match.group(2) else val
+    m_dur = re.search(r'(\d+)\s*(día|dias|noches|noche|nights?|days?)', text_lower)
+    if m_dur:
+        duracion = int(m_dur.group(1))
+    elif re.search(r'\buna\s+semana\b|\bla\s+semana\b|\bsemana\b', text_lower):
+        duracion = 7
+    elif re.search(r'\bdos\s+semanas\b|\b2\s+semanas\b', text_lower):
+        duracion = 14
+    elif re.search(r'\bfinde\b|\bfin\s+de\s+semana\b', text_lower):
+        duracion = 2
 
-    return {"origen": found_iata[0], "destino": found_iata[1], "mes": mes, "duracion": duracion}
+    # Solo ida
+    solo_ida = bool(re.search(r'\bsolo\s+ida\b|\bsin\s+vuelta\b|\bida\s+sola\b', text_lower))
 
+    return {
+        "origen": found_iata[0],
+        "destino": found_iata[1],
+        "mes": mes,
+        "duracion": duracion,
+        "solo_ida": solo_ida,
+    }
+
+
+# ── Transcripción ─────────────────────────────────────────────────────────────
 
 def transcribe_audio(file_path: str) -> str | None:
     if not GROQ_API_KEY:
         return None
     try:
         with open(file_path, "rb") as f:
-            response = requests.post(
+            r = requests.post(
                 "https://api.groq.com/openai/v1/audio/transcriptions",
                 headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
                 files={"file": (os.path.basename(file_path), f, "audio/ogg")},
                 data={"model": "whisper-large-v3", "language": "es"},
                 timeout=30,
             )
-        if response.status_code == 200:
-            return response.json().get("text", "").strip()
+        if r.status_code == 200:
+            return r.json().get("text", "").strip()
     except Exception:
         pass
     return None
@@ -325,100 +386,144 @@ def transcribe_audio(file_path: str) -> str | None:
 
 def download_voice(file_id: str) -> str | None:
     try:
-        file_info = bot.get_file(file_id)
-        file_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}"
-        r = requests.get(file_url, timeout=30)
-        tmp = f"/tmp/voice_{file_id}.ogg"
-        with open(tmp, "wb") as f:
+        info = bot.get_file(file_id)
+        url = f"https://api.telegram.org/file/bot{TOKEN}/{info.file_path}"
+        r = requests.get(url, timeout=30)
+        path = f"/tmp/voice_{file_id}.ogg"
+        with open(path, "wb") as f:
             f.write(r.content)
-        return tmp
+        return path
     except Exception:
         return None
 
 
-# ── Actions ──────────────────────────────────────────────────────────────────
+# ── Acciones ──────────────────────────────────────────────────────────────────
 
-def do_vuelos(chat_id, reply_to_id, origen, destino, fecha_ida, fecha_vuelta=None):
+def do_vuelos(chat_id, reply_to_id, origen, destino, fecha_ida, fecha_vuelta=None, edit_msg_id=None):
     args = ["flights", origen, destino, fecha_ida]
     if fecha_vuelta:
         args += ["--return", fecha_vuelta]
     args += ["--sort", "CHEAPEST"]
 
-    msg = bot.send_message(chat_id, f"🔍 Buscando vuelos {origen} → {destino}...",
-                           reply_to_message_id=reply_to_id)
+    if edit_msg_id:
+        bot.edit_message_text(random.choice(MENSAJES_BUSCANDO_VUELO), chat_id, edit_msg_id)
+        msg_id = edit_msg_id
+    else:
+        m = bot.send_message(chat_id, random.choice(MENSAJES_BUSCANDO_VUELO),
+                             reply_to_message_id=reply_to_id)
+        msg_id = m.message_id
+
     data = run_fli_json(args)
+
     if not data or not data.get("success"):
-        bot.edit_message_text("❌ No pude obtener resultados.", chat_id, msg.message_id)
+        bot.edit_message_text(
+            "Ups, no pude conectarme con Google Flights en este momento 😕\n"
+            "Intentá de nuevo en unos segundos.",
+            chat_id, msg_id
+        )
         return
 
-    label = fecha_ida + (f" ↔ {fecha_vuelta}" if fecha_vuelta else "")
+    label = fmt_date_es(fecha_ida) + (f" → {fmt_date_es(fecha_vuelta)}" if fecha_vuelta else " (solo ida)")
     header = f"✈️ *{origen} → {destino}* — {label}\n\n"
     body = format_flights(data, fecha_vuelta)
 
     bot.edit_message_text(
         header + body,
-        chat_id=chat_id, message_id=msg.message_id,
+        chat_id=chat_id, message_id=msg_id,
         parse_mode="Markdown", disable_web_page_preview=True,
     )
 
 
-def do_fechas(chat_id, reply_to_id, origen, destino, mes=None, duracion=3):
+def do_fechas(chat_id, reply_to_id, origen, destino, mes=None, duracion=3, edit_msg_id=None):
     if mes:
         year = datetime.today().year
         now = datetime.today()
         if mes < now.month or (mes == now.month and now.day > 20):
             year += 1
         desde = datetime(year, mes, 1).strftime("%Y-%m-%d")
-        hasta_dt = datetime(year + 1, 1, 1) - timedelta(days=1) if mes == 12 \
-            else datetime(year, mes + 1, 1) - timedelta(days=1)
+        hasta_dt = (datetime(year + 1, 1, 1) - timedelta(days=1)) if mes == 12 \
+            else (datetime(year, mes + 1, 1) - timedelta(days=1))
         hasta = hasta_dt.strftime("%Y-%m-%d")
         rango_txt = list(MESES.keys())[mes - 1].capitalize()
     else:
         desde = datetime.today().strftime("%Y-%m-%d")
         hasta = (datetime.today() + timedelta(days=60)).strftime("%Y-%m-%d")
-        rango_txt = "próximos 60 días"
+        rango_txt = "los próximos 60 días"
 
-    msg = bot.send_message(chat_id, f"🔍 Buscando fechas baratas {origen} → {destino} ({rango_txt})...",
-                           reply_to_message_id=reply_to_id)
+    loading = f"{random.choice(MENSAJES_BUSCANDO)}"
+    if edit_msg_id:
+        bot.edit_message_text(loading, chat_id, edit_msg_id)
+        msg_id = edit_msg_id
+    else:
+        m = bot.send_message(chat_id, loading, reply_to_message_id=reply_to_id)
+        msg_id = m.message_id
 
     raw = run_fli_text(["dates", origen, destino, "--from", desde, "--to", hasta,
                         "--duration", str(duracion), "--round", "--sort"])
+
+    if raw == "__timeout__":
+        bot.edit_message_text(
+            "La búsqueda tardó demasiado 😕 Probá con un rango de fechas más corto.",
+            chat_id, msg_id
+        )
+        return
+    if raw == "__error__":
+        bot.edit_message_text(
+            "Ups, algo salió mal al conectarme con Google Flights 😕 Intentá de nuevo en un momento.",
+            chat_id, msg_id
+        )
+        return
+
     table = format_dates_table(raw, origen, destino, duracion)
+    header = f"📅 *{origen} → {destino}* — {rango_txt}\n\n"
 
     bot.edit_message_text(
-        f"📅 *{origen} → {destino}* — {rango_txt}\n\n{table}",
-        chat_id=chat_id, message_id=msg.message_id,
+        header + table,
+        chat_id=chat_id, message_id=msg_id,
         parse_mode="Markdown", disable_web_page_preview=True,
     )
 
 
-def process_text(chat_id, message_id, text):
-    # Detect greetings
-    normalized = text.lower().strip().rstrip("!").rstrip("?")
+# ── Procesamiento central ─────────────────────────────────────────────────────
+
+def process_text(chat_id, message_id, text, edit_msg_id=None):
+    normalized = text.lower().strip().rstrip("!").rstrip("?").rstrip(".")
+
     if normalized in SALUDOS:
-        import random
         bot.send_message(chat_id, random.choice(RESPUESTAS_SALUDO),
+                         reply_to_message_id=message_id, parse_mode="Markdown")
+        return
+
+    if normalized in AGRADECIMIENTOS:
+        bot.send_message(chat_id, random.choice(RESPUESTAS_GRACIAS),
                          reply_to_message_id=message_id, parse_mode="Markdown")
         return
 
     parsed = parse_natural(text)
     if parsed:
-        do_fechas(chat_id, message_id, parsed["origen"], parsed["destino"],
-                  mes=parsed.get("mes"), duracion=parsed.get("duracion", 3))
-    else:
-        bot.send_message(
-            chat_id,
-            "Mmm, no logré identificar la ruta 🤔\n\n"
-            "Intentá con algo como:\n"
-            "✈️ _\"mendoza a barcelona en mayo\"_\n"
-            "✈️ _\"mdz miami junio 7 días\"_\n"
-            "✈️ _\"quiero ir a Madrid\"_\n\n"
-            "¿Me podés contar a dónde querés ir? 😊",
-            reply_to_message_id=message_id, parse_mode="Markdown",
+        do_fechas(
+            chat_id, message_id,
+            parsed["origen"], parsed["destino"],
+            mes=parsed.get("mes"),
+            duracion=parsed.get("duracion", 3),
+            edit_msg_id=edit_msg_id,
         )
+    else:
+        reply = (
+            "Hmm, no pude identificar el destino 🤔\n\n"
+            "Contame a dónde querés ir, por ejemplo:\n"
+            "✈️ _\"mendoza a barcelona en mayo\"_\n"
+            "✈️ _\"quiero ir a Miami, una semana en julio\"_\n"
+            "✈️ _\"mdz eze\"_\n\n"
+            "¿A dónde tenés ganas de ir? 😊"
+        )
+        if edit_msg_id:
+            bot.edit_message_text(reply, chat_id, edit_msg_id, parse_mode="Markdown")
+        else:
+            bot.send_message(chat_id, reply, reply_to_message_id=message_id, parse_mode="Markdown")
 
 
-# ── Handlers ─────────────────────────────────────────────────────────────────
+# ── Handlers ──────────────────────────────────────────────────────────────────
 
 @bot.message_handler(commands=["start"])
 def cmd_start(message):
@@ -426,29 +531,48 @@ def cmd_start(message):
     bot.send_message(
         message.chat.id,
         f"¡Hola, {nombre}! 👋 Soy *Flynow*, tu asistente para encontrar vuelos baratos. ✈️\n\n"
-        f"Puedo buscar precios en Google Flights por vos. Solo contame:\n\n"
-        f"🌍 *¿A dónde querés ir?*\n"
-        f"📅 *¿Cuándo más o menos?*\n"
-        f"🕐 *¿Cuántos días?*\n\n"
-        f"Por ejemplo:\n"
-        f"_\"quiero ir a Barcelona en julio, una semana\"_\n"
-        f"_\"fechas baratas de Mendoza a Miami\"_\n\n"
-        f"También podés mandarme un 🎙️ *audio* y te entiendo igual. ¡Empecemos! 😊",
+        f"Busco precios en Google Flights para que vos elijas el mejor momento para volar.\n\n"
+        f"Solo contame:\n"
+        f"• ¿A dónde querés ir?\n"
+        f"• ¿Más o menos en qué época?\n"
+        f"• ¿Cuántos días?\n\n"
+        f"Ejemplo: _\"quiero ir a Barcelona en julio, una semana\"_\n\n"
+        f"También podés mandarme un 🎙️ *audio* si preferís hablar.\n\n"
+        f"¿A dónde soñás viajar? 🌍",
         parse_mode="Markdown",
     )
 
 
 @bot.message_handler(commands=["help", "ayuda"])
 def cmd_help(message):
-    bot.send_message(message.chat.id, HELP_TEXT, parse_mode="Markdown")
+    bot.send_message(
+        message.chat.id,
+        "✈️ *¿Cómo usar Flynow?*\n\n"
+        "Lo más fácil es escribirme en lenguaje natural o mandarme un 🎙️ audio:\n\n"
+        "• _\"mendoza a barcelona en mayo, 7 días\"_\n"
+        "• _\"vuelos baratos a Miami en junio\"_\n"
+        "• _\"quiero ir a Madrid, una semana\"_\n"
+        "• _\"mdz eze\"_ (código IATA directo)\n\n"
+        "Si querés una fecha específica:\n"
+        "• /vuelos `MDZ EZE 2026-04-15`\n"
+        "• /vuelos `MDZ EZE 2026-04-15 2026-04-20` _(ida y vuelta)_\n\n"
+        "💡 No necesitás saber los códigos de aeropuerto — escribí el nombre de la ciudad nomás.",
+        parse_mode="Markdown",
+    )
 
 
 @bot.message_handler(commands=["vuelos"])
 def cmd_vuelos(message):
     parts = message.text.split()[1:]
     if len(parts) < 3:
-        bot.reply_to(message, "Uso: `/vuelos ORIGEN DESTINO FECHA [VUELTA]`\nEj: `/vuelos MDZ EZE 2026-04-15`",
-                     parse_mode="Markdown")
+        bot.reply_to(
+            message,
+            "Para buscar vuelos en una fecha específica necesito:\n"
+            "`/vuelos ORIGEN DESTINO FECHA`\n\n"
+            "Ejemplo: `/vuelos MDZ EZE 2026-04-15`\n\n"
+            "O si preferís, escribime directamente: _\"vuelos de mendoza a ezeiza el 15 de abril\"_ 😊",
+            parse_mode="Markdown"
+        )
         return
     origen = resolve_iata(parts[0]) or parts[0].upper()
     destino = resolve_iata(parts[1]) or parts[1].upper()
@@ -460,8 +584,14 @@ def cmd_vuelos(message):
 def cmd_fechas(message):
     parts = message.text.split()[1:]
     if len(parts) < 2:
-        bot.reply_to(message, "Uso: `/fechas ORIGEN DESTINO [DIAS] [DURACION]`\nEj: `/fechas MDZ BCN 90 7`",
-                     parse_mode="Markdown")
+        bot.reply_to(
+            message,
+            "Para buscar fechas baratas necesito al menos origen y destino:\n"
+            "`/fechas ORIGEN DESTINO`\n\n"
+            "Ejemplo: `/fechas MDZ BCN`\n\n"
+            "O simplemente escribime: _\"fechas baratas de mendoza a barcelona\"_ 😊",
+            parse_mode="Markdown"
+        )
         return
     origen = resolve_iata(parts[0]) or parts[0].upper()
     destino = resolve_iata(parts[1]) or parts[1].upper()
@@ -469,7 +599,7 @@ def cmd_fechas(message):
     duracion = int(parts[3]) if len(parts) >= 4 else 3
     desde = datetime.today().strftime("%Y-%m-%d")
     hasta = (datetime.today() + timedelta(days=dias)).strftime("%Y-%m-%d")
-    msg = bot.reply_to(message, f"🔍 Buscando {origen} → {destino}...")
+    msg = bot.reply_to(message, random.choice(MENSAJES_BUSCANDO))
     raw = run_fli_text(["dates", origen, destino, "--from", desde, "--to", hasta,
                         "--duration", str(duracion), "--round", "--sort"])
     table = format_dates_table(raw, origen, destino, duracion)
@@ -483,29 +613,56 @@ def cmd_fechas(message):
 @bot.message_handler(content_types=["voice"])
 def handle_voice(message):
     if not GROQ_API_KEY:
-        bot.reply_to(message, "🎙️ Audio no disponible aún (falta configurar GROQ_API_KEY).")
+        bot.reply_to(
+            message,
+            "Los audios todavía no están activados 🎙️\n"
+            "Pero podés escribirme lo mismo con texto y te ayudo igual 😊"
+        )
         return
-    msg = bot.reply_to(message, "🎙️ Transcribiendo audio...")
+
+    msg = bot.reply_to(message, "🎙️ Escuchando tu audio...")
     path = download_voice(message.voice.file_id)
+
     if not path:
-        bot.edit_message_text("❌ No pude descargar el audio.", message.chat.id, msg.message_id)
+        bot.edit_message_text(
+            "No pude procesar el audio 😕 ¿Podés escribirme lo mismo con texto?",
+            message.chat.id, msg.message_id
+        )
         return
+
     text = transcribe_audio(path)
     try:
         os.remove(path)
     except Exception:
         pass
+
     if not text:
-        bot.edit_message_text("❌ No pude transcribir el audio.", message.chat.id, msg.message_id)
+        bot.edit_message_text(
+            "No pude entender el audio 😕 ¿Podés escribirme lo mismo con texto?",
+            message.chat.id, msg.message_id
+        )
         return
-    bot.edit_message_text(f"🎙️ _{text}_\n\n🔍 Buscando...", message.chat.id, msg.message_id,
-                          parse_mode="Markdown")
-    process_text(message.chat.id, message.message_id, text)
+
+    # Mostrar transcripción y buscar en el mismo mensaje
+    bot.edit_message_text(
+        f"🎙️ Escuché: _{text}_\n\n{random.choice(MENSAJES_BUSCANDO)}",
+        message.chat.id, msg.message_id, parse_mode="Markdown"
+    )
+    process_text(message.chat.id, message.message_id, text, edit_msg_id=msg.message_id)
 
 
 @bot.message_handler(content_types=["text"])
 def handle_text(message):
     process_text(message.chat.id, message.message_id, message.text)
+
+
+@bot.message_handler(content_types=["sticker", "photo", "video", "document", "location"])
+def handle_other(message):
+    bot.reply_to(
+        message,
+        "Solo entiendo texto y audios por ahora 😅\n"
+        "Contame a dónde querés volar y te busco los precios 🌍"
+    )
 
 
 if __name__ == "__main__":
