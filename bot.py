@@ -188,38 +188,103 @@ def format_flights(data: dict, return_date: str = None) -> str:
     return "\n\n".join(lines)
 
 
-def format_dates_table(raw: str) -> str:
-    """Extract the cheapest dates table from text output."""
-    lines = raw.splitlines()
-    table, in_table = [], False
-    for line in lines:
-        if "Cheapest Dates" in line:
-            in_table = True
-        if in_table:
-            table.append(line)
-    return "\n".join(table) if table else raw
+DIAS_ES = {
+    "Monday": "Lunes", "Tuesday": "Martes", "Wednesday": "Miércoles",
+    "Thursday": "Jueves", "Friday": "Viernes", "Saturday": "Sábado", "Sunday": "Domingo",
+}
+MESES_ES = {
+    "01": "ene", "02": "feb", "03": "mar", "04": "abr", "05": "may", "06": "jun",
+    "07": "jul", "08": "ago", "09": "sep", "10": "oct", "11": "nov", "12": "dic",
+}
+
+
+def fmt_date_es(iso: str) -> str:
+    """2026-04-16 → 16 abr"""
+    try:
+        parts = iso.split("-")
+        return f"{int(parts[2])} {MESES_ES[parts[1]]}"
+    except Exception:
+        return iso
+
+
+def format_dates_table(raw: str, origen: str, destino: str, duracion: int) -> str:
+    """Parse the raw table and return top 10 as clean human-readable Telegram text."""
+    rows = []
+    for line in raw.splitlines():
+        # Match table data rows: │ 2026-04-16 │ Thursday │ 2026-04-19 │ Sunday │ $1,160.00 │
+        m = re.match(r'\s*[│|]\s*(\d{4}-\d{2}-\d{2})\s*[│|]\s*(\w+)\s*[│|]\s*(\d{4}-\d{2}-\d{2})\s*[│|]\s*(\w+)\s*[│|]\s*\$?([\d,\.]+)', line)
+        if m:
+            dep, dep_day, ret, ret_day, price_raw = m.groups()
+            price = float(price_raw.replace(",", ""))
+            rows.append((dep, dep_day, ret, ret_day, price))
+
+    if not rows:
+        return raw  # fallback
+
+    rows.sort(key=lambda x: x[4])
+    top = rows[:10]
+
+    link_base = google_flights_url(origen, destino, top[0][0], top[0][2])
+    lines = [f"🏆 *Top {len(top)} fechas más baratas* ({duracion} noches, ida y vuelta)\n"]
+    for i, (dep, dep_day, ret, ret_day, price) in enumerate(top, 1):
+        emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+        dep_es = DIAS_ES.get(dep_day, dep_day)
+        ret_es = DIAS_ES.get(ret_day, ret_day)
+        lines.append(
+            f"{emoji} *${price:,.0f}* — {fmt_date_es(dep)} ({dep_es}) → {fmt_date_es(ret)} ({ret_es})"
+        )
+
+    lines.append(f"\n[🔗 Ver todos en Google Flights]({link_base})")
+    return "\n".join(lines)
 
 
 def resolve_iata(word: str) -> str | None:
     return CIUDAD_A_IATA.get(word.lower().strip())
 
 
+def find_city_in_text(text_lower: str) -> list:
+    """Return list of IATA codes in order of appearance in text."""
+    # Build a list of (position, iata) by scanning for city names and codes
+    matches = []
+
+    # 3-letter codes (by word position)
+    for i, word in enumerate(text_lower.split()):
+        clean = re.sub(r'[^a-z]', '', word)
+        code = CIUDAD_A_IATA.get(clean.upper().lower()) or (clean.upper() if clean.upper() in CIUDAD_A_IATA.values() else None)
+        if code:
+            pos = text_lower.find(clean)
+            if not any(pos == m[0] for m in matches):
+                matches.append((pos, code))
+
+    # Multi-word city names
+    for city, code in sorted(CIUDAD_A_IATA.items(), key=lambda x: -len(x[0])):
+        idx = text_lower.find(city)
+        if idx >= 0 and not any(code == m[1] for m in matches):
+            matches.append((idx, code))
+
+    matches.sort(key=lambda x: x[0])
+    return [code for _, code in matches]
+
+
 def parse_natural(text: str) -> dict | None:
     text_lower = text.lower()
-    found_iata = []
 
-    for word in text.split():
-        clean = re.sub(r'[^a-zA-Z]', '', word).upper()
-        if len(clean) == 3 and clean.isalpha():
-            resolved = resolve_iata(clean.lower())
-            if resolved and resolved not in found_iata:
-                found_iata.append(resolved)
-            elif clean in CIUDAD_A_IATA.values() and clean not in found_iata:
-                found_iata.append(clean)
-
-    for city, code in sorted(CIUDAD_A_IATA.items(), key=lambda x: -len(x[0])):
-        if city in text_lower and code not in found_iata:
-            found_iata.append(code)
+    # Try "de [origin] a [dest]" pattern first
+    patron = re.search(
+        r'(?:de|desde)\s+(.+?)\s+(?:a|hasta|para|hacia)\s+(.+?)(?:\s+en\s+|\s+para\s+|\s*$)',
+        text_lower
+    )
+    if patron:
+        orig_str = patron.group(1).strip()
+        dest_str = patron.group(2).strip()
+        orig_code = next((CIUDAD_A_IATA[c] for c in sorted(CIUDAD_A_IATA, key=len, reverse=True) if c in orig_str), None)
+        dest_code = next((CIUDAD_A_IATA[c] for c in sorted(CIUDAD_A_IATA, key=len, reverse=True) if c in dest_str), None)
+        if orig_code and dest_code:
+            found_iata = [orig_code, dest_code]
+        else:
+            found_iata = find_city_in_text(text_lower)
+    else:
+        found_iata = find_city_in_text(text_lower)
 
     if len(found_iata) < 2:
         return None
@@ -318,13 +383,10 @@ def do_fechas(chat_id, reply_to_id, origen, destino, mes=None, duracion=3):
 
     raw = run_fli_text(["dates", origen, destino, "--from", desde, "--to", hasta,
                         "--duration", str(duracion), "--round", "--sort"])
-    table = format_dates_table(raw)
-
-    link = google_flights_url(origen, destino, desde)
-    footer = f"\n\n[🔗 Buscar en Google Flights]({link})"
+    table = format_dates_table(raw, origen, destino, duracion)
 
     bot.edit_message_text(
-        f"📅 *{origen} → {destino}* — {rango_txt}, {duracion} noches\n\n```\n{table[:3200]}\n```{footer}",
+        f"📅 *{origen} → {destino}* — {rango_txt}\n\n{table}",
         chat_id=chat_id, message_id=msg.message_id,
         parse_mode="Markdown", disable_web_page_preview=True,
     )
@@ -410,10 +472,9 @@ def cmd_fechas(message):
     msg = bot.reply_to(message, f"🔍 Buscando {origen} → {destino}...")
     raw = run_fli_text(["dates", origen, destino, "--from", desde, "--to", hasta,
                         "--duration", str(duracion), "--round", "--sort"])
-    table = format_dates_table(raw)
-    link = google_flights_url(origen, destino, desde)
+    table = format_dates_table(raw, origen, destino, duracion)
     bot.edit_message_text(
-        f"📅 *{origen} → {destino}* — próximos {dias} días, {duracion} noches\n\n```\n{table[:3200]}\n```\n\n[🔗 Buscar en Google Flights]({link})",
+        f"📅 *{origen} → {destino}* — próximos {dias} días\n\n{table}",
         chat_id=message.chat.id, message_id=msg.message_id,
         parse_mode="Markdown", disable_web_page_preview=True,
     )
